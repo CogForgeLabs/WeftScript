@@ -1,0 +1,25 @@
+def payment(principal, rate, months):
+    r = rate / 12
+    if r == 0:
+        return principal / months
+    f = (1 + r) ** months
+    return principal * r * f / (f - 1)
+
+
+principal = 250000
+rate = 0.065
+n = 360
+pay = payment(principal, rate, n)
+total = round(pay * n, 2)
+print("Loan amortization")
+print(f"Principal: {principal}")
+print(f"Monthly payment: {round(pay, 2)}")
+print(f"Total repaid: {total}")
+print(f"Total interest: {round(total - principal, 2)}")
+print("First 3 payments (interest / principal / balance):")
+balance = principal
+for i in range(3):
+    interest = round(balance * rate / 12, 2)
+    princ = round(pay - interest, 2)
+    balance = round(balance - princ, 2)
+    print(f"  {interest} / {princ} / {balance}")

@@ -1,0 +1,28 @@
+project Bank
+
+thing Account
+    id: UUID
+    balance: Decimal
+
+constraint Solvent
+    balance >= 0
+
+guarantee SafeWithdraw
+    assume balance == start - amount
+    assume start - amount >= 0
+    ensure balance >= 0
+
+fn account(id, bal)
+    return {"id": id, "balance": bal}
+
+fn withdraw(acct, amt)
+    return {"id": acct.id, "balance": acct.balance - amt}
+
+print "=== Bank (declarative schema + executable logic) ==="
+print "SafeWithdraw invariant proven by SMT: {prove(\"SafeWithdraw\")}"
+a = account("acc-1", 100)
+print "account valid against schema: {validate(a, \"Account\")}"
+a = withdraw(a, 30)
+print "after -30: balance={a.balance} solvent={check(a, \"Solvent\")}"
+bad = withdraw(a, 200)
+print "after -200: balance={bad.balance} solvent={check(bad, \"Solvent\")}"

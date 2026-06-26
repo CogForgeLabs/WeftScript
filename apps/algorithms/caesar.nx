@@ -1,0 +1,14 @@
+fn shift_char(c, k)
+    code = ord(c)
+    if code >= 65 and code <= 90
+        return chr(65 + (code - 65 + k) % 26)
+    if code >= 97 and code <= 122
+        return chr(97 + (code - 97 + k) % 26)
+    return c
+
+fn caesar(s, k)
+    return join([shift_char(c, k) for c in s], "")
+
+enc = caesar("Hello, World!", 3)
+print "encrypted: {enc}"
+print "decrypted: {caesar(enc, 23)}"

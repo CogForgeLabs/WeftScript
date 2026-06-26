@@ -1,0 +1,14 @@
+fn task(name, priority, done)
+    return {"name": name, "priority": priority, "done": done}
+
+tasks = [task("Write report", 2, false), task("Fix bug", 1, false), task("Email client", 3, true), task("Deploy release", 1, false)]
+done = len([t for t in tasks if t.done])
+print "Task manager"
+print "Total tasks: {len(tasks)}"
+print "Completed: {done}"
+print "Pending: {len(tasks) - done}"
+print "Pending by priority:"
+for p in range(1, 4)
+    for t in tasks
+        if t.priority == p and t.done == false
+            print "  [P{p}] {t.name}"

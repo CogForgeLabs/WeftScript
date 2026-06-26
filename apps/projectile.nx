@@ -1,0 +1,21 @@
+fn deg2rad(d)
+    return d * pi() / 180
+
+v = 30
+angle = 45
+g = 9.81
+rad = deg2rad(angle)
+vx = v * cos(rad)
+vy = v * sin(rad)
+t_flight = 2 * vy / g
+rng = vx * t_flight
+max_h = vy * vy / (2 * g)
+print "Projectile motion (v=30 m/s, angle=45 deg)"
+print "Time of flight: {round(t_flight, 3)} s"
+print "Range: {round(rng, 3)} m"
+print "Max height: {round(max_h, 3)} m"
+print "Trajectory (t, height):"
+for i in range(6)
+    t = t_flight * i / 5
+    h = vy * t - 0.5 * g * t * t
+    print "  t={round(t, 2)} h={round(h, 3)}"

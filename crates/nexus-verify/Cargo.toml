@@ -1,0 +1,9 @@
+[package]
+name = "nexus-verify"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "SMT-style symbolic execution and exact linear-arithmetic verification"
+
+[dependencies]
+nexus-core.workspace = true

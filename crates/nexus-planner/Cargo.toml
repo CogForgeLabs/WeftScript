@@ -1,0 +1,12 @@
+[package]
+name = "nexus-planner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "DAG auto-parallelism, HEFT scheduling, and multi-objective routing"
+
+[dependencies]
+nexus-core.workspace = true
+
+[dev-dependencies]
+nexus-dsl.workspace = true

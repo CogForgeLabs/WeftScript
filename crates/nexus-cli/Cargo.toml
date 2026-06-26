@@ -1,0 +1,28 @@
+[package]
+name = "nexus-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The `nexus` command-line driver, benchmarks, and token-usage proof"
+
+[[bin]]
+name = "weft"
+path = "src/main.rs"
+
+[dependencies]
+nexus-core.workspace = true
+nexus-dsl.workspace = true
+nexus-graph.workspace = true
+nexus-verify.workspace = true
+nexus-planner.workspace = true
+nexus-capability.workspace = true
+nexus-runtime.workspace = true
+nexus-optimize.workspace = true
+nexus-exec.workspace = true
+nexus-accel = { workspace = true, features = ["gpu"] }
+nexus-gpu.workspace = true
+nexus-tool.workspace = true
+nexus-secure.workspace = true
+nexus-dashboard.workspace = true
+nexus-app.workspace = true
+serde_json.workspace = true

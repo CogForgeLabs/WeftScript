@@ -1,0 +1,59 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/nexus-core",
+    "crates/nexus-dsl",
+    "crates/nexus-graph",
+    "crates/nexus-verify",
+    "crates/nexus-planner",
+    "crates/nexus-capability",
+    "crates/nexus-runtime",
+    "crates/nexus-optimize",
+    "crates/nexus-exec",
+    "crates/nexus-accel",
+    "crates/nexus-gpu",
+    "crates/nexus-tool",
+    "crates/nexus-secure",
+    "crates/nexus-dashboard",
+    "crates/nexus-app",
+    "crates/nexus-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license-file = "LICENSE"
+authors = ["Cognitive Industries / CogForgeLabs <contact@cognitive-industries.org>"]
+description = "WeftScript — the meta-language above high-level: declare intent, prove it, run it; parallelism, security, and hardware dispatch are automatic"
+repository = "https://github.com/CogForgeLabs/weftscript"
+homepage = "https://cognitive-industries.org"
+keywords = ["language", "verification", "interpreter", "parallelism", "meta-language"]
+categories = ["compilers", "development-tools", "concurrency"]
+
+[workspace.dependencies]
+blake3 = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+nexus-core = { path = "crates/nexus-core" }
+nexus-dsl = { path = "crates/nexus-dsl" }
+nexus-graph = { path = "crates/nexus-graph" }
+nexus-verify = { path = "crates/nexus-verify" }
+nexus-planner = { path = "crates/nexus-planner" }
+nexus-capability = { path = "crates/nexus-capability" }
+nexus-runtime = { path = "crates/nexus-runtime" }
+nexus-optimize = { path = "crates/nexus-optimize" }
+nexus-exec = { path = "crates/nexus-exec" }
+nexus-accel = { path = "crates/nexus-accel" }
+nexus-gpu = { path = "crates/nexus-gpu" }
+nexus-tool = { path = "crates/nexus-tool" }
+nexus-secure = { path = "crates/nexus-secure" }
+nexus-dashboard = { path = "crates/nexus-dashboard" }
+nexus-app = { path = "crates/nexus-app" }
+
+# Lean, fast release profile — supports the "less resource usage" goal.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true

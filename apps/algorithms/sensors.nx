@@ -1,0 +1,24 @@
+project Sensors
+
+thing Reading
+    sensor: String
+    temp: Decimal
+
+constraint SafeRange
+    temp >= -40
+    temp <= 85
+
+fn reading(sensor, temp)
+    return {"sensor": sensor, "temp": temp}
+
+readings = [reading("A", 21.5), reading("B", 92.0), reading("C", -55.0), reading("D", 70.0)]
+print "=== Sensor monitor (schema + runtime constraint check) ==="
+alarms = 0
+for r in readings
+    ok = check(r, "SafeRange")
+    if ok == false
+        alarms += 1
+    print "  {r.sensor}: {r.temp}C safe={ok} schema_valid={validate(r, \"Reading\")}"
+print "Alarms: {alarms}"
+avg = vmean([r.temp for r in readings])
+print "Mean temp: {round(avg, 2)}C"

@@ -1,0 +1,30 @@
+project SensorGrid
+
+# Edge telemetry: a declared schema + safety band, with executable code that
+# validates a batch, flags out-of-band readings, and computes vectorized stats
+# (the dot/mean ops auto-dispatch to SIMD/threads/GPU by size).
+
+thing Reading
+    sensor: String
+    celsius: Decimal
+
+constraint InBand
+    celsius >= -40
+    celsius <= 85
+
+fn r(s, c)
+    return {"sensor": s, "celsius": c}
+
+batch = [r("a", 21), r("b", 91), r("c", -50), r("d", 19), r("e", 30)]
+
+temps = [x.celsius for x in batch]
+flagged = 0
+for x in batch
+    if not check(x, "InBand")
+        flagged = flagged + 1
+        trace("warn", "out-of-band: {x.sensor}={x.celsius}")
+
+print "readings: {len(batch)}"
+print "flagged: {flagged}"
+print "mean: {round(vmean(temps), 2)}"
+print "spread (max-min): {vmax(temps) - vmin(temps)}"

@@ -1,0 +1,16 @@
+fn primes(n)
+    is_p = [true for i in range(n + 1)]
+    result = []
+    p = 2
+    while p <= n
+        if is_p[p]
+            result = push(result, p)
+            m = p * p
+            while m <= n
+                is_p[m] = false
+                m = m + p
+        p += 1
+    return result
+
+print "Primes up to 60:"
+print primes(60)

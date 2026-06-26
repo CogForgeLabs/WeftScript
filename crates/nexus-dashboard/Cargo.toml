@@ -1,0 +1,10 @@
+[package]
+name = "nexus-dashboard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Optional auto-generated web dashboard for Nexus — view outputs/traces and control runs (headless by default)"
+
+[dependencies]
+nexus-core.workspace = true
+nexus-app.workspace = true

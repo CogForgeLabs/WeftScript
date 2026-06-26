@@ -1,0 +1,30 @@
+fn mandel(cx, cy, max_iter)
+    x = 0
+    y = 0
+    i = 0
+    while i < max_iter
+        if x * x + y * y > 4
+            return i
+        nx = x * x - y * y + cx
+        ny = 2 * x * y + cy
+        x = nx
+        y = ny
+        i += 1
+    return max_iter
+
+print "Mandelbrot set:"
+for py in range(14)
+    line = ""
+    for px in range(46)
+        cx = -2.2 + px * 0.058
+        cy = -1.1 + py * 0.157
+        it = mandel(cx, cy, 24)
+        if it == 24
+            line = line + "#"
+        elif it > 6
+            line = line + "+"
+        elif it > 3
+            line = line + "."
+        else
+            line = line + " "
+    print line

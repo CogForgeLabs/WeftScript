@@ -1,0 +1,12 @@
+[package]
+name = "nexus-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Mixed declarative + executable program loader and declarative host builtins"
+
+[dependencies]
+nexus-core.workspace = true
+nexus-dsl.workspace = true
+nexus-exec.workspace = true
+nexus-verify.workspace = true

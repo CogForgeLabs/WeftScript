@@ -1,0 +1,34 @@
+project DataPipeline
+
+# A classic ETL job: declared record schema, then an executable extract →
+# transform (parallel) → load → aggregate flow over the validated rows.
+
+thing Sale
+    region: String
+    amount: Decimal
+
+fn sale(region, amount)
+    return {"region": region, "amount": amount}
+
+fn taxed(s)
+    # transform: apply 10% tax, return the grossed amount
+    return round(s.amount * 1.1, 2)
+
+raw = [sale("north", 100), sale("south", 250), sale("north", 75), sale("east", 300)]
+
+# Extract+validate
+clean = [s for s in raw if validate(s, "Sale")]
+
+# Transform in parallel
+gross = pmap("taxed", clean)
+
+# Aggregate by region (group-by with a map)
+totals = map()
+for i in range(len(clean))
+    reg = clean[i].region
+    totals = set(totals, reg, get(totals, reg, 0) + gross[i])
+
+print "rows: {len(clean)}"
+print "grand total: {round(vsum(gross), 2)}"
+for k in keys(totals)
+    print "{k}: {round(get(totals, k), 2)}"

@@ -1,0 +1,19 @@
+project Inventory
+
+thing Item
+    sku: String
+    qty: Decimal
+    price: Decimal
+
+constraint InStock
+    qty > 0
+
+fn item(sku, qty, price)
+    return {"sku": sku, "qty": qty, "price": price}
+
+items = [item("WIDGET", 5, 2.5), item("GADGET", 0, 9.0), item("GIZMO", 12, 1.25)]
+total = vsum([it.price * it.qty for it in items])
+print "=== Inventory (declarative schema + executable logic) ==="
+print "Total stock value: {round(total, 2)}"
+for it in items
+    print "  {ljust(it.sku, 8)} qty={it.qty} in_stock={check(it, \"InStock\")} valid={validate(it, \"Item\")}"

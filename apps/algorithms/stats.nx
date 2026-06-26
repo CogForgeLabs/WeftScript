@@ -1,0 +1,14 @@
+data = [4, 8, 15, 16, 23, 42, 7, 11]
+n = len(data)
+mean = vmean(data)
+variance = vsum([(x - mean) * (x - mean) for x in data]) / n
+std = sqrt(variance)
+sorted_d = sort(data)
+mid = floor(n / 2)
+median = (sorted_d[mid - 1] + sorted_d[mid]) / 2
+print "Statistics (SIMD-accelerated):"
+print "  mean   = {round(mean, 3)}"
+print "  stddev = {round(std, 3)}"
+print "  median = {median}"
+print "  min/max = {vmin(data)} / {vmax(data)}"
+print "  sum    = {vsum(data)}"

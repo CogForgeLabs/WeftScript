@@ -1,0 +1,13 @@
+fn gcd(a, b)
+    while b != 0
+        t = b
+        b = a % b
+        a = t
+    return a
+
+fn lcm(a, b)
+    return a * b / gcd(a, b)
+
+print "gcd(48, 36) = {gcd(48, 36)}"
+print "lcm(4, 6) = {lcm(4, 6)}"
+print "gcd(1071, 462) = {gcd(1071, 462)}"

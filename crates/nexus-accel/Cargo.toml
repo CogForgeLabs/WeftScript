@@ -1,0 +1,13 @@
+[package]
+name = "nexus-accel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "SIMD vectorization, multithreading, and cost-based hardware dispatch"
+
+[dependencies]
+nexus-gpu = { workspace = true, optional = true }
+
+[features]
+default = []
+gpu = ["dep:nexus-gpu"]

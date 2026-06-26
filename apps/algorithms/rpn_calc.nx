@@ -1,0 +1,22 @@
+fn rpn(tokens)
+    stack = []
+    for t in tokens
+        if t == "+" or t == "-" or t == "*" or t == "/"
+            n = len(stack)
+            b = stack[n - 1]
+            a = stack[n - 2]
+            stack = slice(stack, 0, n - 2)
+            if t == "+"
+                stack = push(stack, a + b)
+            elif t == "-"
+                stack = push(stack, a - b)
+            elif t == "*"
+                stack = push(stack, a * b)
+            else
+                stack = push(stack, a / b)
+        else
+            stack = push(stack, num(t))
+    return stack[0]
+
+print "3 4 + 5 * = {rpn([\"3\", \"4\", \"+\", \"5\", \"*\"])}"
+print "10 2 / 3 - = {rpn([\"10\", \"2\", \"/\", \"3\", \"-\"])}"

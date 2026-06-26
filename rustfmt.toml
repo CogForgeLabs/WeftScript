@@ -1,0 +1,2 @@
+# The codebase is written to a wider line budget than rustfmt's 100-col default.
+max_width = 120

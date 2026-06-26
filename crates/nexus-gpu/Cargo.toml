@@ -1,0 +1,11 @@
+[package]
+name = "nexus-gpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Real GPU compute backend (wgpu) for Nexus vector operations"
+
+[dependencies]
+wgpu = "22"
+pollster = "0.3"
+bytemuck = { version = "1", features = ["derive"] }

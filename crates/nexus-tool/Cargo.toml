@@ -1,0 +1,9 @@
+[package]
+name = "nexus-tool"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Terminal / CLI / tool automation for Nexus — command generation, mutation, auto-correction, parallel offload, all traced"
+
+[dependencies]
+nexus-core.workspace = true

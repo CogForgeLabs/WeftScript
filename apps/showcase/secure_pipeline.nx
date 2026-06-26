@@ -1,0 +1,30 @@
+project SecurePipeline
+
+# A privacy-preserving record pipeline: declared schema + automatic
+# multithreading (amap) + built-in PII redaction and anonymization. The raw
+# audit log never leaks personal data; identities are pseudonymized stably.
+
+thing Record
+    user: String
+    note: String
+
+constraint NonEmpty
+    1 >= 1
+
+fn rec(user, note)
+    return {"user": user, "note": note}
+
+# A clean audit line: pseudonymous id + PII-scrubbed note.
+fn audit(r)
+    return anonymize(r.user) + " | " + redact(r.note)
+
+raw = [rec("alice@corp.com", "card 4111 1111 1111 1111 on file"), rec("bob@corp.com", "call me at 555-123-4567"), rec("carol@corp.com", "ssn 123-45-6789 verified")]
+
+# Validate, then process in parallel (the runtime auto-decides threads).
+clean = [r for r in raw if validate(r, "Record")]
+lines = amap("audit", clean)
+
+print "records: {len(clean)}"
+for l in lines
+    print l
+print "any raw PII leaked: {contains_pii(join(lines, \" \"))}"

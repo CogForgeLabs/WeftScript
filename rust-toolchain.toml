@@ -1,0 +1,4 @@
+# Nexus uses `#![feature(portable_simd)]` (nexus-accel), which requires nightly.
+[toolchain]
+channel = "nightly"
+components = ["rustfmt", "clippy"]

@@ -1,0 +1,27 @@
+fn dijkstra(adj, n, src)
+    dist = [inf() for i in range(n)]
+    dist[src] = 0
+    visited = [false for i in range(n)]
+    count = 0
+    while count < n
+        u = -1
+        best = inf()
+        for v in range(n)
+            if visited[v] == false and dist[v] < best
+                best = dist[v]
+                u = v
+        if u == -1
+            count = n
+        else
+            visited[u] = true
+            for edge in adj[u]
+                v = edge[0]
+                w = edge[1]
+                if dist[u] + w < dist[v]
+                    dist[v] = dist[u] + w
+            count += 1
+    return dist
+
+adj = [[[1, 4], [2, 1]], [[3, 1]], [[1, 2], [3, 5]], []]
+print "Shortest distances from node 0:"
+print dijkstra(adj, 4, 0)

@@ -1,0 +1,37 @@
+project BuildPipeline
+
+# A CI/CD pipeline expressed in Nexus: declarative policy + executable tool
+# automation. Each stage drives a real shell command; the parallel ones are
+# offloaded across threads, and a failed command auto-corrects.
+
+policy CiPolicy
+    audit true
+    restrict deploy -> production
+    default_deny false
+
+fn stage(cmd)
+    r = sh(cmd)
+    return r.ok
+
+# Sequential gate stages.
+gates = ["echo lint", "echo typecheck"]
+all_ok = true
+for g in gates
+    ok = stage(g)
+    trace("gate {g} -> {ok}")
+    all_ok = all_ok and ok
+
+# Independent build matrix — run concurrently with parallel shell offload.
+matrix = ["echo build-linux", "echo build-mac", "echo build-windows"]
+results = psh(matrix)
+built = 0
+for r in results
+    if r.ok
+        built = built + 1
+
+# A deliberately mistyped command, auto-corrected by mutation+retry.
+fixed = auto_fix("ecHo deploy")
+
+print "gates passed: {all_ok}"
+print "matrix built: {built}/{len(matrix)}"
+print "auto-fixed deploy ok: {fixed.ok}"

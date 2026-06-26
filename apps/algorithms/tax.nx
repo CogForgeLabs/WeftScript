@@ -1,0 +1,30 @@
+project Tax
+
+thing Return
+    income: Decimal
+    tax: Decimal
+
+constraint NonNegativeTax
+    tax >= 0
+
+guarantee NonNegativeTaxable
+    assume taxable == income - deduction
+    assume income >= deduction
+    assume deduction >= 0
+    ensure taxable >= 0
+
+fn bracket_tax(income)
+    if income <= 18200
+        return 0
+    if income <= 45000
+        return (income - 18200) * 0.19
+    if income <= 120000
+        return 5092 + (income - 45000) * 0.325
+    return 29467 + (income - 120000) * 0.37
+
+print "=== Progressive tax (schema + proven invariant) ==="
+print "NonNegativeTaxable proven by SMT: {prove(\"NonNegativeTaxable\")}"
+for income in [15000, 40000, 90000, 200000]
+    t = round(bracket_tax(income), 2)
+    r = {"income": income, "tax": t}
+    print "  income={income} tax={t} valid={check(r, \"NonNegativeTax\")}"

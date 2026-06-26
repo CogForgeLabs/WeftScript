@@ -1,0 +1,10 @@
+[package]
+name = "nexus-secure"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Built-in security, privacy, and anonymity for Nexus — PII redaction, secret detection, capability sandboxing, anonymization"
+
+[dependencies]
+nexus-core.workspace = true
+blake3.workspace = true

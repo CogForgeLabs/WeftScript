@@ -1,0 +1,35 @@
+project CreditRisk
+
+# --- Declarative half: schema, runtime constraint, and a formally-proven guarantee ---
+thing Application
+    id: UUID
+    income: Decimal
+    debt: Decimal
+
+constraint Affordable
+    debt <= income
+
+guarantee SafeApproval
+    assume approved == income - debt
+    assume income - debt >= 0
+    ensure approved >= 0
+
+# --- Executable half: parallel scoring over validated records ---
+fn score(app)
+    ratio = app.debt / app.income
+    return round((1 - ratio) * 100, 1)
+
+fn make(id, inc, debt)
+    return {"id": id, "income": inc, "debt": debt}
+
+apps = [make("a", 8000, 2000), make("b", 5000, 4500), make("c", 9000, 1000)]
+
+# pmap fans the pure `score` function across threads (auto-parallel)
+scores = pmap("score", apps)
+
+for i in range(len(apps))
+    a = apps[i]
+    ok = validate(a, "Application") and check(a, "Affordable")
+    print "{a.id}: affordable={ok} score={scores[i]}"
+
+print "SafeApproval proven for all paths: {prove(\"SafeApproval\")}"
