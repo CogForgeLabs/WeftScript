@@ -204,6 +204,22 @@ pub fn lex_line(text: &str, line_no: usize) -> Result<Vec<Tok>, LexError> {
                 while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
                     i += 1;
                 }
+                // Scientific notation: `1e15`, `2.5E-3` — an `e`/`E` followed by
+                // an optionally-signed digit run extends the number literal.
+                if i < chars.len() && (chars[i] == 'e' || chars[i] == 'E') {
+                    let mut j = i + 1;
+                    if j < chars.len() && (chars[j] == '+' || chars[j] == '-') {
+                        j += 1;
+                    }
+                    if j < chars.len() && chars[j].is_ascii_digit() {
+                        i = j;
+                        while i < chars.len() && chars[i].is_ascii_digit() {
+                            i += 1;
+                        }
+                        out.push(Tok::Number(chars[start..i].iter().collect()));
+                        continue;
+                    }
+                }
                 let num: String = chars[start..i].iter().collect();
                 // Optional unit suffix immediately following the digits.
                 let suffix_start = i;
@@ -281,6 +297,17 @@ mod tests {
         assert_eq!(lex_line("max_memory: 2GB", 1).unwrap()[2], Tok::Bytes(2 * 1024 * 1024 * 1024));
         assert_eq!(lex_line("t: 1500ms", 1).unwrap()[2], Tok::Duration(1500));
         assert_eq!(lex_line("b: $0.025", 1).unwrap()[2], Tok::Money("0.025".into()));
+    }
+
+    #[test]
+    fn lexes_scientific_notation() {
+        assert_eq!(lex_line("1e15", 1).unwrap(), vec![Tok::Number("1e15".into())]);
+        assert_eq!(lex_line("2.5E-3", 1).unwrap(), vec![Tok::Number("2.5E-3".into())]);
+        assert_eq!(lex_line("x = 6.02e+23", 1).unwrap()[2], Tok::Number("6.02e+23".into()));
+        // A bare `e` after digits is still a unit-suffix error, not an exponent.
+        assert!(lex_line("3e", 1).is_err());
+        // Unit suffixes are unaffected.
+        assert_eq!(lex_line("t: 1500ms", 1).unwrap()[2], Tok::Duration(1500));
     }
 
     #[test]

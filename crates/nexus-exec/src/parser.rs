@@ -184,6 +184,18 @@ fn parse_stmts(blocks: &[Block]) -> R<Vec<Stmt>> {
                 let body = parse_stmts(&b.children)?;
                 stmts.push(Stmt::For(var, iter, body));
             }
+            Some("break") => {
+                if b.toks.len() > 1 || !b.children.is_empty() {
+                    return Err(err(b.line_no, "`break` takes no arguments"));
+                }
+                stmts.push(Stmt::Break);
+            }
+            Some("continue") => {
+                if b.toks.len() > 1 || !b.children.is_empty() {
+                    return Err(err(b.line_no, "`continue` takes no arguments"));
+                }
+                stmts.push(Stmt::Continue);
+            }
             Some("print") => stmts.push(Stmt::Print(parse_expr(&b.toks[1..], b.line_no)?)),
             Some("throw") => stmts.push(Stmt::Throw(parse_expr(&b.toks[1..], b.line_no)?)),
             Some("yield") => stmts.push(Stmt::Yield(parse_expr(&b.toks[1..], b.line_no)?)),
@@ -499,6 +511,10 @@ fn parse_primary(c: &mut Cur) -> R<AExpr> {
                     let v = parse_bp(c, 0)?;
                     pairs.push((k, v));
                     if c.eat(&Tok::Comma) {
+                        // Trailing comma before `}` is fine (multi-line literals).
+                        if c.peek() == Some(&Tok::RBrace) {
+                            break;
+                        }
                         continue;
                     }
                     break;

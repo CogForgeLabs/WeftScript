@@ -80,6 +80,10 @@ pub enum Stmt {
     Try(Vec<Stmt>, String, Vec<Stmt>),
     /// `yield expr` — emit a value from a generator function.
     Yield(AExpr),
+    /// `break` — exit the innermost enclosing loop.
+    Break,
+    /// `continue` — skip to the next iteration of the innermost loop.
+    Continue,
 }
 
 /// A user-defined function.

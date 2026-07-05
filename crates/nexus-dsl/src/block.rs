@@ -30,8 +30,15 @@ struct Raw {
 }
 
 /// Parse raw source text into a forest of top-level blocks.
+///
+/// A logical line continues onto following physical lines while it has an
+/// unclosed `[`, `{`, or `(` — so list/map literals and call argument lists
+/// may span multiple lines. Continuation lines may be indented freely; the
+/// logical line keeps the indent of its first physical line.
 pub fn build_blocks(src: &str) -> Result<Vec<Block>, LexError> {
     let mut raws: Vec<Raw> = Vec::new();
+    // An in-progress logical line with its current open-bracket depth.
+    let mut open: Option<(Raw, i64)> = None;
     for (idx, raw_line) in src.lines().enumerate() {
         let line_no = idx + 1;
         // Strip comments: everything from an unquoted '#' to end of line.
@@ -39,15 +46,57 @@ pub fn build_blocks(src: &str) -> Result<Vec<Block>, LexError> {
         if content.trim().is_empty() {
             continue;
         }
-        let indent = content.chars().take_while(|c| *c == ' ' || *c == '\t').count();
         let toks = lex_line(content.trim(), line_no)?;
         if toks.is_empty() {
             continue;
         }
-        raws.push(Raw { line_no, indent, toks });
+        let delta = bracket_delta(&toks);
+        match open.take() {
+            Some((mut raw, depth)) => {
+                raw.toks.extend(toks);
+                let depth = depth + delta;
+                if depth > 0 {
+                    open = Some((raw, depth));
+                } else if depth < 0 {
+                    return Err(LexError { line: line_no, msg: "unmatched closing bracket".into() });
+                } else {
+                    raws.push(raw);
+                }
+            }
+            None => {
+                let indent = content.chars().take_while(|c| *c == ' ' || *c == '\t').count();
+                if delta > 0 {
+                    open = Some((Raw { line_no, indent, toks }, delta));
+                } else if delta < 0 {
+                    return Err(LexError { line: line_no, msg: "unmatched closing bracket".into() });
+                } else {
+                    raws.push(Raw { line_no, indent, toks });
+                }
+            }
+        }
+    }
+    if let Some((raw, _)) = open {
+        return Err(LexError {
+            line: raw.line_no,
+            msg: "unclosed bracket: a `[`, `{`, or `(` opened here is never closed".into(),
+        });
     }
     let mut pos = 0;
     Ok(parse_level(&raws, &mut pos, 0))
+}
+
+/// Net bracket/brace/paren depth change across a token run. Brackets inside
+/// string literals are already opaque (they live in `Tok::Str`).
+fn bracket_delta(toks: &[Tok]) -> i64 {
+    let mut d = 0;
+    for t in toks {
+        match t {
+            Tok::LBracket | Tok::LBrace | Tok::LParen => d += 1,
+            Tok::RBracket | Tok::RBrace | Tok::RParen => d -= 1,
+            _ => {}
+        }
+    }
+    d
 }
 
 /// Recursively collect blocks whose indent is `>= min_indent`, nesting deeper

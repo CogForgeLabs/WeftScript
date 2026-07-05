@@ -32,6 +32,34 @@ fn trace_dispatch(op: &str, n: usize) {
 
 type ER<T> = Result<T, String>;
 
+/// Builtins that are pure computations: no I/O, no shell, no network, no
+/// clock, deterministic for a given input. The auto-parallelizer only fans a
+/// comprehension across threads when every called name is a user function it
+/// can analyze or a member of this list — an unknown name (e.g. a host-provided
+/// builtin like `validate`, which cannot cross threads) blocks parallelization.
+pub const PURE_BUILTINS: &[&str] = &[
+    // math
+    "abs", "floor", "ceil", "sqrt", "sin", "cos", "tan", "log", "exp", "pi", "int", "pow", "round",
+    "min", "max", "sum", "avg", "mean", "inf",
+    // generic
+    "len", "str", "num", "bool", "type",
+    // strings
+    "upper", "lower", "trim", "split", "join", "replace", "contains", "starts_with", "ends_with",
+    "substr", "repeat", "ord", "chr", "find", "index_of", "rjust", "ljust", "lines",
+    // lists
+    "range", "push", "sort", "sort_desc", "reverse", "unique", "slice", "collect", "take", "first",
+    "last", "count", "zip", "any", "all", "enumerate",
+    // maps
+    "map", "set", "get", "has", "keys", "values", "items", "del",
+    // JSON (pure transforms)
+    "json_encode", "json_decode",
+    // security/privacy (pure text transforms)
+    "redact", "contains_pii", "pii_kinds", "anonymize", "sandbox_ok",
+    // vectors / hardware introspection
+    "vadd", "vsub", "vmul", "vscale", "vsum", "vdot", "vmean", "vmax", "vmin", "accel_backend",
+    "cores", "hardware",
+];
+
 /// Evaluate a binary operator over two values.
 pub fn binary(op: BinOp, a: &Value, b: &Value) -> ER<Value> {
     use BinOp::*;
@@ -117,38 +145,103 @@ pub fn index_get(coll: &Value, idx: &Value) -> ER<Value> {
 }
 
 pub fn index_set(coll: &Value, idx: &Value, v: Value) -> ER<Value> {
+    let mut out = coll.clone();
+    index_set_mut(&mut out, idx, v)?;
+    Ok(out)
+}
+
+/// Assign `coll[idx] = v` in place. When the collection is uniquely owned this
+/// mutates the existing allocation (no copy); when shared it copies once
+/// (copy-on-write via [`Arc::make_mut`]). This is what makes the ubiquitous
+/// `counts[k] = counts[k] + 1` accumulation pattern O(1) per step instead of
+/// O(collection size).
+pub fn index_set_mut(coll: &mut Value, idx: &Value, v: Value) -> ER<()> {
     match coll {
         Value::List(l) => {
-            let mut nv = (**l).clone();
-            let i = idx.as_num()? as usize;
-            if i >= nv.len() {
+            let i = idx.as_num()? as i64;
+            let len = l.len() as i64;
+            let i = if i < 0 { len + i } else { i };
+            if i < 0 || i >= len {
                 return Err(format!("list index {} out of range for assignment", i));
             }
-            nv[i] = v;
-            Ok(Value::list(nv))
+            Arc::make_mut(l)[i as usize] = v;
+            Ok(())
         }
         Value::Map(m) => {
-            let mut nm = (**m).clone();
-            nm.insert(idx.as_str()?.to_string(), v);
-            Ok(Value::map(nm))
+            let k = idx.as_str()?.to_string();
+            Arc::make_mut(m).insert(k, v);
+            Ok(())
         }
         Value::Nil => {
             // Allow building a map from nil via string-key assignment.
             let mut nm = BTreeMap::new();
             nm.insert(idx.as_str()?.to_string(), v);
-            Ok(Value::map(nm))
+            *coll = Value::map(nm);
+            Ok(())
         }
         _ => Err(format!("cannot index-assign {}", coll.type_name())),
     }
 }
 
+/// Append to a list in place (unique) or via one copy (shared). Nil becomes a
+/// fresh single-element list, matching `push`'s copying behavior.
+pub fn push_mut(coll: &mut Value, v: Value) -> ER<()> {
+    match coll {
+        Value::List(l) => {
+            Arc::make_mut(l).push(v);
+            Ok(())
+        }
+        Value::Nil => {
+            *coll = Value::list(vec![v]);
+            Ok(())
+        }
+        other => Err(format!("push: expected list, got {}", other.type_name())),
+    }
+}
+
+/// Recursively set `container[i0][i1]... = value`, mutating in place along the
+/// path (copy-on-write only where a node is shared). Lookup failures surface
+/// before any mutation happens.
+pub fn set_path_mut(container: &mut Value, indices: &[Value], value: Value) -> ER<()> {
+    if indices.len() == 1 {
+        return index_set_mut(container, &indices[0], value);
+    }
+    match container {
+        Value::List(l) => {
+            let i = indices[0].as_num()? as i64;
+            let len = l.len() as i64;
+            let i = if i < 0 { len + i } else { i };
+            if i < 0 || i >= len {
+                return Err(format!("list index {} out of range", i));
+            }
+            set_path_mut(&mut Arc::make_mut(l)[i as usize], &indices[1..], value)
+        }
+        Value::Map(m) => {
+            let k = indices[0].as_str()?;
+            if !m.contains_key(k) {
+                return Err(format!("missing key `{}`", k));
+            }
+            let k = k.to_string();
+            set_path_mut(Arc::make_mut(m).get_mut(&k).expect("checked above"), &indices[1..], value)
+        }
+        other => Err(format!("cannot index {}", other.type_name())),
+    }
+}
+
 pub fn iterate(seq: &Value) -> ER<Vec<Value>> {
+    Ok(iter_vals(seq)?.into_owned())
+}
+
+/// Iterate a sequence without copying when possible: lists lend their backing
+/// slice; strings/maps/streams materialize.
+pub fn iter_vals(seq: &Value) -> ER<std::borrow::Cow<'_, [Value]>> {
+    use std::borrow::Cow;
     match seq {
-        Value::List(l) => Ok((**l).clone()),
-        Value::Str(s) => Ok(s.chars().map(|c| Value::str(c.to_string())).collect()),
-        Value::Map(m) => Ok(m.keys().map(|k| Value::str(k.clone())).collect()),
+        Value::List(l) => Ok(Cow::Borrowed(&l[..])),
+        Value::Str(s) => Ok(Cow::Owned(s.chars().map(|c| Value::str(c.to_string())).collect())),
+        Value::Map(m) => Ok(Cow::Owned(m.keys().map(|k| Value::str(k.clone())).collect())),
         // Draining a stream materializes it (lazily, through its bounded channel).
-        Value::Stream(s) => s.drain(),
+        Value::Stream(s) => Ok(Cow::Owned(s.drain()?)),
         _ => Err(format!("cannot iterate {}", seq.type_name())),
     }
 }
@@ -229,21 +322,21 @@ pub fn call(name: &str, args: &[Value]) -> ER<Value> {
         "max" => fold_num(args, |a, b| a.max(b)),
         "sum" => {
             arity(name, args, 1)?;
-            let items = iterate(&args[0])?;
+            let items = iter_vals(&args[0])?;
             let mut s = 0.0;
-            for it in items {
+            for it in items.iter() {
                 s += it.as_num()?;
             }
             Ok(Value::Num(s))
         }
         "avg" | "mean" => {
             arity(name, args, 1)?;
-            let items = iterate(&args[0])?;
+            let items = iter_vals(&args[0])?;
             if items.is_empty() {
                 return Ok(Value::Num(0.0));
             }
             let mut s = 0.0;
-            for it in &items {
+            for it in items.iter() {
                 s += it.as_num()?;
             }
             Ok(Value::Num(s / items.len() as f64))
@@ -449,9 +542,31 @@ pub fn call(name: &str, args: &[Value]) -> ER<Value> {
                 .collect();
             Ok(Value::list(pairs))
         }
+        "any" => {
+            arity(name, args, 1)?;
+            Ok(Value::Bool(iter_vals(&args[0])?.iter().any(|v| v.truthy())))
+        }
+        "all" => {
+            arity(name, args, 1)?;
+            Ok(Value::Bool(iter_vals(&args[0])?.iter().all(|v| v.truthy())))
+        }
+        "enumerate" => {
+            arity(name, args, 1)?;
+            let items = iter_vals(&args[0])?;
+            let out: Vec<Value> = items
+                .iter()
+                .enumerate()
+                .map(|(i, v)| Value::list(vec![Value::Num(i as f64), v.clone()]))
+                .collect();
+            Ok(Value::list(out))
+        }
         "inf" => {
             arity(name, args, 0)?;
             Ok(Value::Num(f64::INFINITY))
+        }
+        "type" => {
+            arity(name, args, 1)?;
+            Ok(Value::str(args[0].type_name()))
         }
         "bool" => {
             arity(name, args, 1)?;
@@ -496,6 +611,86 @@ pub fn call(name: &str, args: &[Value]) -> ER<Value> {
                 Value::Map(m) => Ok(Value::list(m.values().cloned().collect())),
                 _ => Err("values: expected map".into()),
             }
+        }
+        "items" => {
+            arity(name, args, 1)?;
+            match &args[0] {
+                Value::Map(m) => Ok(Value::list(
+                    m.iter()
+                        .map(|(k, v)| Value::list(vec![Value::str(k.clone()), v.clone()]))
+                        .collect(),
+                )),
+                _ => Err("items: expected map".into()),
+            }
+        }
+        "del" => {
+            arity(name, args, 2)?;
+            match &args[0] {
+                Value::Map(m) => {
+                    let mut nm = m.clone();
+                    Arc::make_mut(&mut nm).remove(args[1].as_str()?);
+                    Ok(Value::Map(nm))
+                }
+                _ => Err("del: expected map".into()),
+            }
+        }
+
+        // ---- JSON ----
+        "json_encode" => {
+            arity(name, args, 1)?;
+            Ok(Value::str(crate::json::encode(&args[0])))
+        }
+        "json_decode" => {
+            arity(name, args, 1)?;
+            crate::json::decode(args[0].as_str()?)
+        }
+
+        // ---- files (same power class as `sh`, minus the shell) ----
+        "read_file" => {
+            arity(name, args, 1)?;
+            std::fs::read_to_string(args[0].as_str()?)
+                .map(Value::str)
+                .map_err(|e| format!("read_file: {}: {}", args[0], e))
+        }
+        "write_file" => {
+            arity(name, args, 2)?;
+            std::fs::write(args[0].as_str()?, args[1].as_str()?)
+                .map(|_| Value::Nil)
+                .map_err(|e| format!("write_file: {}: {}", args[0], e))
+        }
+        "append_file" => {
+            arity(name, args, 2)?;
+            use std::io::Write;
+            let (path, text) = (args[0].as_str()?, args[1].as_str()?);
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .and_then(|mut f| f.write_all(text.as_bytes()))
+                .map(|_| Value::Nil)
+                .map_err(|e| format!("append_file: {}: {}", path, e))
+        }
+
+        // ---- time ----
+        "now_ms" => {
+            arity(name, args, 0)?;
+            let ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as f64)
+                .unwrap_or(0.0);
+            Ok(Value::Num(ms))
+        }
+
+        // ---- text ----
+        "lines" => {
+            arity(name, args, 1)?;
+            Ok(Value::list(
+                args[0]
+                    .as_str()?
+                    .lines()
+                    .map(|l| Value::str(l.trim_end_matches('\r')))
+                    .collect(),
+            ))
         }
 
         // ---- terminal / tool automation (auto-sandboxed) ----
@@ -639,15 +834,15 @@ pub fn call(name: &str, args: &[Value]) -> ER<Value> {
 
         // ---- hardware-accelerated numeric vectors (auto-dispatched) ----
         "vadd" => {
-            trace_dispatch("vadd", list_len(&args));
+            trace_dispatch("vadd", list_len(args));
             vec_binary(name, args, nexus_accel::add)
         }
         "vsub" => {
-            trace_dispatch("vsub", list_len(&args));
+            trace_dispatch("vsub", list_len(args));
             vec_binary(name, args, nexus_accel::sub)
         }
         "vmul" => {
-            trace_dispatch("vmul", list_len(&args));
+            trace_dispatch("vmul", list_len(args));
             vec_binary(name, args, nexus_accel::mul)
         }
         "vscale" => {

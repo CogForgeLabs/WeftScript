@@ -1,15 +1,25 @@
 //! Tree-walking interpreter: runs an [`App`] and captures its printed output.
 //! Supports functions, classes (methods + `self`), exceptions (`try`/`catch`/
-//! `throw`), and eager generators (`yield`).
+//! `throw`), `break`/`continue`, and eager generators (`yield`).
+//!
+//! Performance model: the program's functions and classes are compiled once
+//! into an [`Arc`]-shared [`Program`] (function bodies are never cloned per
+//! call — calls are an `Arc` bump). Scopes are fast-hashed maps, `for` loops
+//! iterate shared lists without copying them, and the accumulate patterns
+//! (`xs = push(xs, v)`, `m[k] = v`) mutate in place when the collection is
+//! uniquely owned instead of rebuilding it — turning the naive O(n²) shapes an
+//! LLM naturally writes into O(n).
 
 use crate::ast::*;
 use crate::builtins;
+use crate::fxhash::FxHashMap;
 use crate::value::{StreamHandle, StreamMsg, Value};
-use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+/// A variable scope: name → value, fast-hashed (names are short and trusted).
+pub(crate) type Scope = FxHashMap<String, Value>;
 
 /// Hard resource constraints for a run. Any breach aborts the offending
 /// statement with a recoverable [`Signal::Error`] *before* the process can
@@ -75,6 +85,8 @@ type ER<T> = Result<T, Signal>;
 enum Flow {
     Normal,
     Return(Value),
+    Break,
+    Continue,
 }
 
 /// Host-provided builtins (e.g. the declarative context).
@@ -82,14 +94,44 @@ pub trait HostFns {
     fn call(&self, name: &str, args: &[Value]) -> Option<Result<Value, String>>;
 }
 
+/// The immutable, shareable half of a running program: functions and classes,
+/// indexed for O(1) lookup with `Arc`-shared bodies. Built once by
+/// [`Interp::new`]; every call site and worker thread shares it by refcount.
+pub(crate) struct Program {
+    funcs: FxHashMap<String, Arc<Func>>,
+    classes: FxHashMap<String, Arc<ClassRT>>,
+}
+
+/// A class compiled for dispatch: methods by name instead of a linear list.
+pub(crate) struct ClassRT {
+    methods: FxHashMap<String, Arc<Func>>,
+}
+
+impl Program {
+    fn compile(app: &App) -> Program {
+        let mut funcs = FxHashMap::default();
+        for f in &app.funcs {
+            funcs.insert(f.name.clone(), Arc::new(f.clone()));
+        }
+        let mut classes = FxHashMap::default();
+        for c in &app.classes {
+            let mut methods = FxHashMap::default();
+            for m in &c.methods {
+                methods.insert(m.name.clone(), Arc::new(m.clone()));
+            }
+            classes.insert(c.name.clone(), Arc::new(ClassRT { methods }));
+        }
+        Program { funcs, classes }
+    }
+}
+
 /// A running interpreter.
 ///
-/// `funcs`/`classes` live behind an [`Arc`] so a parallel builtin (`pmap`,
-/// `parallel`) can cheaply share the whole program with worker threads, each of
-/// which spins up its own throwaway [`Interp`] over the same definitions.
+/// The whole program lives behind an [`Arc`] so a parallel builtin (`pmap`,
+/// `parallel`) can cheaply share it with worker threads, each of which spins up
+/// its own throwaway [`Interp`] over the same definitions.
 pub struct Interp {
-    funcs: Arc<HashMap<String, Func>>,
-    classes: Arc<HashMap<String, Class>>,
+    prog: Arc<Program>,
     pub output: Vec<String>,
     steps: u64,
     step_limit: u64,
@@ -104,29 +146,20 @@ pub struct Interp {
     /// `yield` sends items here (a bounded channel → backpressure → streaming).
     yield_sink: Option<SyncSender<StreamMsg>>,
     /// Memoized purity of user functions, for transparent auto-parallelization.
-    pure_cache: HashMap<String, bool>,
+    pure_cache: FxHashMap<String, bool>,
 }
 
 impl Interp {
     pub fn new(app: &App) -> Interp {
-        let mut funcs = HashMap::new();
-        for f in &app.funcs {
-            funcs.insert(f.name.clone(), f.clone());
-        }
-        let mut classes = HashMap::new();
-        for c in &app.classes {
-            classes.insert(c.name.clone(), c.clone());
-        }
-        Interp::from_parts(Arc::new(funcs), Arc::new(classes))
+        Interp::from_parts(Arc::new(Program::compile(app)))
     }
 
-    /// Build an interpreter over already-shared definitions (used by worker
+    /// Build an interpreter over an already-shared program (used by worker
     /// threads in the parallel builtins).
-    fn from_parts(funcs: Arc<HashMap<String, Func>>, classes: Arc<HashMap<String, Class>>) -> Interp {
+    fn from_parts(prog: Arc<Program>) -> Interp {
         let l = Limits::default();
         Interp {
-            funcs,
-            classes,
+            prog,
             output: Vec::new(),
             steps: 0,
             step_limit: l.steps,
@@ -136,7 +169,7 @@ impl Interp {
             wall_limit: None,
             host: None,
             yield_sink: None,
-            pure_cache: HashMap::new(),
+            pure_cache: FxHashMap::default(),
         }
     }
 
@@ -164,17 +197,27 @@ impl Interp {
 
     pub fn run(app: &App) -> Result<Vec<String>, String> {
         let mut it = Interp::new(app);
-        let mut scope: HashMap<String, Value> = HashMap::new();
-        it.exec_block(&app.main, &mut scope).map_err(Signal::message)?;
+        let mut scope = Scope::default();
+        it.exec_main(&app.main, &mut scope).map_err(Signal::message)?;
         Ok(it.output)
     }
 
     pub fn run_with_host(app: &App, host: Box<dyn HostFns>) -> Result<Vec<String>, String> {
         let mut it = Interp::new(app);
         it.host = Some(host);
-        let mut scope: HashMap<String, Value> = HashMap::new();
-        it.exec_block(&app.main, &mut scope).map_err(Signal::message)?;
+        let mut scope = Scope::default();
+        it.exec_main(&app.main, &mut scope).map_err(Signal::message)?;
         Ok(it.output)
+    }
+
+    /// Execute the top-level statement block, rejecting loop-control flow that
+    /// escaped every loop.
+    fn exec_main(&mut self, stmts: &[Stmt], scope: &mut Scope) -> ER<()> {
+        match self.exec_block(stmts, scope)? {
+            Flow::Break => Err(Signal::Error("`break` outside a loop".into())),
+            Flow::Continue => Err(Signal::Error("`continue` outside a loop".into())),
+            _ => Ok(()),
+        }
     }
 
     /// Run `main` under hard resource limits with transactional rollback.
@@ -188,7 +231,7 @@ impl Interp {
     pub fn run_guarded(app: &App, limits: Limits) -> GuardedOutcome {
         let mut it = Interp::new(app);
         it.set_limits(limits);
-        let mut scope: HashMap<String, Value> = HashMap::new();
+        let mut scope = Scope::default();
         let mut last_good = scope.clone();
         let mut error = None;
         let mut recovered = false;
@@ -196,6 +239,12 @@ impl Interp {
             match it.exec_stmt(stmt, &mut scope) {
                 Ok(Flow::Normal) => last_good = scope.clone(),
                 Ok(Flow::Return(_)) => break,
+                Ok(Flow::Break) | Ok(Flow::Continue) => {
+                    error = Some("`break`/`continue` outside a loop".into());
+                    scope = last_good.clone();
+                    recovered = true;
+                    break;
+                }
                 Err(sig) => {
                     error = Some(sig.message());
                     scope = last_good.clone(); // rollback to last consistent state
@@ -230,7 +279,7 @@ impl Interp {
         Ok(())
     }
 
-    fn exec_block(&mut self, stmts: &[Stmt], scope: &mut HashMap<String, Value>) -> ER<Flow> {
+    fn exec_block(&mut self, stmts: &[Stmt], scope: &mut Scope) -> ER<Flow> {
         for s in stmts {
             match self.exec_stmt(s, scope)? {
                 Flow::Normal => {}
@@ -240,12 +289,18 @@ impl Interp {
         Ok(Flow::Normal)
     }
 
-    fn exec_stmt(&mut self, s: &Stmt, scope: &mut HashMap<String, Value>) -> ER<Flow> {
+    fn exec_stmt(&mut self, s: &Stmt, scope: &mut Scope) -> ER<Flow> {
         self.tick()?;
         match s {
             Stmt::Assign(name, e) => {
+                // Accumulate fast path: `xs = push(xs, v)` / `m = set(m, k, v)`
+                // reuse the existing collection in place when uniquely owned,
+                // instead of copying the whole thing (O(n²) → O(n)).
+                if let Some(flow) = self.try_accumulate(name, e, scope)? {
+                    return Ok(flow);
+                }
                 let v = self.eval(e, scope)?;
-                scope.insert(name.clone(), v);
+                assign(scope, name, v);
                 Ok(Flow::Normal)
             }
             Stmt::IndexAssign(name, idx_exprs, e) => {
@@ -254,9 +309,15 @@ impl Interp {
                 for ix in idx_exprs {
                     indices.push(self.eval(ix, scope)?);
                 }
-                let cur = scope.get(name).cloned().unwrap_or(Value::Nil);
-                let updated = set_path(&cur, &indices, v)?;
-                scope.insert(name.clone(), updated);
+                // Take the current value out of its slot so the mutation sees a
+                // uniquely-owned collection (no copy) in the common case.
+                let mut cur = match scope.get_mut(name) {
+                    Some(slot) => std::mem::replace(slot, Value::Nil),
+                    None => Value::Nil,
+                };
+                let res = builtins::set_path_mut(&mut cur, &indices, v);
+                assign(scope, name, cur);
+                res.map_err(Signal::from)?;
                 Ok(Flow::Normal)
             }
             Stmt::Print(e) => {
@@ -268,6 +329,8 @@ impl Interp {
                 let v = self.eval(e, scope)?;
                 Ok(Flow::Return(v))
             }
+            Stmt::Break => Ok(Flow::Break),
+            Stmt::Continue => Ok(Flow::Continue),
             Stmt::Throw(e) => {
                 let v = self.eval(e, scope)?;
                 Err(Signal::Throw(v))
@@ -292,7 +355,7 @@ impl Interp {
                         Signal::Throw(v) => v,
                         Signal::Error(msg) => Value::str(msg),
                     };
-                    scope.insert(var.clone(), exc);
+                    assign(scope, var, exc);
                     self.exec_block(handler, scope)
                 }
             },
@@ -307,39 +370,61 @@ impl Interp {
                 while self.eval(cond, scope)?.truthy() {
                     self.tick()?;
                     match self.exec_block(body, scope)? {
-                        Flow::Normal => {}
-                        ret => return Ok(ret),
+                        Flow::Normal | Flow::Continue => {}
+                        Flow::Break => break,
+                        ret @ Flow::Return(_) => return Ok(ret),
                     }
                 }
                 Ok(Flow::Normal)
             }
             Stmt::For(var, iter, body) => {
                 let seq = self.eval(iter, scope)?;
-                // Streams are pulled lazily — one item at a time, so an infinite
-                // generator can drive a `for` loop with flat memory.
-                if let Value::Stream(s) = &seq {
-                    let s = Arc::clone(s);
-                    while let Some(item) = s.next() {
-                        let item = item.map_err(Signal::Error)?;
-                        self.tick()?;
-                        scope.insert(var.clone(), item);
-                        match self.exec_block(body, scope)? {
-                            Flow::Normal => {}
-                            ret => return Ok(ret),
+                match &seq {
+                    // Streams are pulled lazily — one item at a time, so an
+                    // infinite generator can drive a `for` loop with flat memory.
+                    Value::Stream(s) => {
+                        let s = Arc::clone(s);
+                        while let Some(item) = s.next() {
+                            let item = item.map_err(Signal::Error)?;
+                            self.tick()?;
+                            assign(scope, var, item);
+                            match self.exec_block(body, scope)? {
+                                Flow::Normal | Flow::Continue => {}
+                                Flow::Break => break,
+                                ret @ Flow::Return(_) => return Ok(ret),
+                            }
                         }
+                        Ok(Flow::Normal)
                     }
-                    return Ok(Flow::Normal);
-                }
-                let items = builtins::iterate(&seq)?;
-                for item in items {
-                    self.tick()?;
-                    scope.insert(var.clone(), item);
-                    match self.exec_block(body, scope)? {
-                        Flow::Normal => {}
-                        ret => return Ok(ret),
+                    // Lists iterate over the shared backing store directly —
+                    // no up-front copy of the whole collection.
+                    Value::List(l) => {
+                        let l = Arc::clone(l);
+                        for item in l.iter() {
+                            self.tick()?;
+                            assign(scope, var, item.clone());
+                            match self.exec_block(body, scope)? {
+                                Flow::Normal | Flow::Continue => {}
+                                Flow::Break => break,
+                                ret @ Flow::Return(_) => return Ok(ret),
+                            }
+                        }
+                        Ok(Flow::Normal)
+                    }
+                    _ => {
+                        let items = builtins::iterate(&seq)?;
+                        for item in items {
+                            self.tick()?;
+                            assign(scope, var, item);
+                            match self.exec_block(body, scope)? {
+                                Flow::Normal | Flow::Continue => {}
+                                Flow::Break => break,
+                                ret @ Flow::Return(_) => return Ok(ret),
+                            }
+                        }
+                        Ok(Flow::Normal)
                     }
                 }
-                Ok(Flow::Normal)
             }
             Stmt::Expr(e) => {
                 self.eval(e, scope)?;
@@ -348,7 +433,47 @@ impl Interp {
         }
     }
 
-    fn eval(&mut self, e: &AExpr, scope: &mut HashMap<String, Value>) -> ER<Value> {
+    /// Detect and execute the self-accumulate pattern `x = push(x, v)` /
+    /// `x = set(x, k, v)` by mutating `x` in place when uniquely owned.
+    ///
+    /// `push`/`set` are core builtins: user functions with those names take
+    /// precedence (checked below), but host contexts cannot override them.
+    fn try_accumulate(&mut self, name: &str, e: &AExpr, scope: &mut Scope) -> ER<Option<Flow>> {
+        let (fname, args) = match e {
+            AExpr::Call(f, a) => (f.as_str(), a.as_slice()),
+            _ => return Ok(None),
+        };
+        let is_push = fname == "push" && args.len() == 2;
+        let is_set = fname == "set" && args.len() == 3;
+        if !(is_push || is_set) || self.prog.funcs.contains_key(fname) {
+            return Ok(None);
+        }
+        if !matches!(&args[0], AExpr::Var(v) if v == name) || !scope.contains_key(name) {
+            return Ok(None);
+        }
+        // Evaluate the remaining arguments BEFORE detaching the collection, so
+        // expressions that read the same variable (e.g. `push(xs, len(xs))`)
+        // still see it.
+        let mut argv = Vec::with_capacity(args.len() - 1);
+        for a in &args[1..] {
+            argv.push(self.eval(a, scope)?);
+        }
+        let slot = scope.get_mut(name).expect("checked above");
+        let mut cur = std::mem::replace(slot, Value::Nil);
+        let res = if is_push {
+            builtins::push_mut(&mut cur, argv.pop().expect("push arg"))
+        } else {
+            let v = argv.pop().expect("set value");
+            let k = argv.pop().expect("set key");
+            builtins::index_set_mut(&mut cur, &k, v)
+        };
+        self.note_alloc(1)?;
+        assign(scope, name, cur);
+        res.map_err(Signal::from)?;
+        Ok(Some(Flow::Normal))
+    }
+
+    fn eval(&mut self, e: &AExpr, scope: &mut Scope) -> ER<Value> {
         self.tick()?;
         match e {
             AExpr::Num(n) => Ok(Value::Num(*n)),
@@ -368,7 +493,7 @@ impl Interp {
                 Ok(Value::list(v))
             }
             AExpr::MapLit(pairs) => {
-                let mut m = BTreeMap::new();
+                let mut m = std::collections::BTreeMap::new();
                 for (k, val) in pairs {
                     let key = self.eval(k, scope)?;
                     let key = key
@@ -386,14 +511,18 @@ impl Interp {
                 for p in parts {
                     match p {
                         IPart::Lit(text) => s.push_str(text),
-                        IPart::Expr(e) => s.push_str(&self.eval(e, scope)?.to_string()),
+                        IPart::Expr(e) => {
+                            use std::fmt::Write;
+                            let v = self.eval(e, scope)?;
+                            let _ = write!(s, "{}", v);
+                        }
                     }
                 }
                 Ok(Value::str(s))
             }
             AExpr::Comp { elem, var, iter, cond } => {
                 let seq = self.eval(iter, scope)?;
-                let items = builtins::iterate(&seq)?;
+                let items = builtins::iter_vals(&seq)?;
                 // Transparent auto-parallelization: a large comprehension whose
                 // body is side-effect-free and does real per-element work
                 // (calls a user function) is fanned across threads — same
@@ -408,20 +537,19 @@ impl Interp {
                         &[("items", &items.len().to_string())],
                     );
                     let out = par_eval_comp(
-                        Arc::clone(&self.funcs),
-                        Arc::clone(&self.classes),
+                        Arc::clone(&self.prog),
                         scope.clone(),
                         var.clone(),
                         (**elem).clone(),
                         cond.clone(),
-                        items,
+                        items.into_owned(),
                     )?;
                     self.note_alloc(out.len())?;
                     return Ok(Value::list(out));
                 }
                 let mut out = Vec::new();
-                for item in items {
-                    scope.insert(var.clone(), item);
+                for item in items.iter() {
+                    assign(scope, var, item.clone());
                     if let Some(c) = cond {
                         if !self.eval(c, scope)?.truthy() {
                             continue;
@@ -463,13 +591,7 @@ impl Interp {
         }
     }
 
-    fn eval_binary(
-        &mut self,
-        op: BinOp,
-        a: &AExpr,
-        b: &AExpr,
-        scope: &mut HashMap<String, Value>,
-    ) -> ER<Value> {
+    fn eval_binary(&mut self, op: BinOp, a: &AExpr, b: &AExpr, scope: &mut Scope) -> ER<Value> {
         match op {
             BinOp::And => {
                 let av = self.eval(a, scope)?;
@@ -488,7 +610,7 @@ impl Interp {
 
     /// Run a user function (or method) with a prepared local scope, handling
     /// eager generator collection.
-    fn run_func(&mut self, f: &Func, local: HashMap<String, Value>) -> ER<Value> {
+    fn run_func(&mut self, f: &Arc<Func>, local: Scope) -> ER<Value> {
         if f.is_generator {
             return Ok(self.spawn_generator(f, local));
         }
@@ -496,6 +618,8 @@ impl Interp {
         match self.exec_block(&f.body, &mut local)? {
             Flow::Return(v) => Ok(v),
             Flow::Normal => Ok(Value::Nil),
+            Flow::Break => Err(Signal::Error("`break` outside a loop".into())),
+            Flow::Continue => Err(Signal::Error("`continue` outside a loop".into())),
         }
     }
 
@@ -503,17 +627,16 @@ impl Interp {
     /// [`Value::Stream`]. The thread produces items into a bounded channel, so
     /// it runs only as far ahead as the consumer pulls — memory stays flat and
     /// infinite generators are fine (consume with `take`).
-    fn spawn_generator(&self, f: &Func, local: HashMap<String, Value>) -> Value {
+    fn spawn_generator(&self, f: &Arc<Func>, local: Scope) -> Value {
         use std::sync::mpsc::sync_channel;
         let (tx, rx) = sync_channel::<StreamMsg>(64);
-        let funcs = Arc::clone(&self.funcs);
-        let classes = Arc::clone(&self.classes);
-        let body = f.body.clone();
+        let prog = Arc::clone(&self.prog);
+        let f = Arc::clone(f);
         std::thread::spawn(move || {
-            let mut w = Interp::from_parts(funcs, classes);
+            let mut w = Interp::from_parts(prog);
             w.yield_sink = Some(tx.clone());
             let mut scope = local;
-            if let Err(sig) = w.exec_block(&body, &mut scope) {
+            if let Err(sig) = w.exec_block(&f.body, &mut scope) {
                 // Forward a genuine error; the "consumer stopped" sentinel just
                 // means the receiver was dropped, so this send is a harmless no-op.
                 let _ = tx.send(StreamMsg::Err(sig.message()));
@@ -523,21 +646,25 @@ impl Interp {
     }
 
     fn call(&mut self, name: &str, args: Vec<Value>) -> ER<Value> {
-        // Language-level parallelism: these fan user functions across threads.
+        // Language-level parallelism and higher-order builtins: these invoke
+        // user functions, so they live here rather than in `builtins`.
         match name {
             "pmap" => return self.par_map(args),
             "amap" => return self.auto_map(args),
             "parallel" => return self.par_run(args),
+            "filter" => return self.filter_hof(args),
+            "reduce" => return self.reduce_hof(args),
             _ => {}
         }
         // Constructor: `ClassName(args)` builds an instance.
-        if self.classes.contains_key(name) {
+        if self.prog.classes.contains_key(name) {
             return self.construct(name, args);
         }
         // User-defined function.
-        if let Some(f) = self.funcs.get(name).cloned() {
+        if let Some(f) = self.prog.funcs.get(name) {
+            let f = Arc::clone(f);
             check_arity(name, &f.params, args.len())?;
-            let mut local = HashMap::new();
+            let mut local = Scope::default();
             for (p, v) in f.params.iter().zip(args) {
                 local.insert(p.clone(), v);
             }
@@ -560,15 +687,15 @@ impl Interp {
     fn dispatch_method(&mut self, recv: Value, name: &str, args: Vec<Value>) -> ER<Value> {
         if let Value::Map(m) = &recv {
             if let Some(Value::Str(cls)) = m.get("__class__") {
-                let cls = cls.to_string();
-                if let Some(class) = self.classes.get(&cls).cloned() {
-                    if let Some(method) = class.methods.iter().find(|f| f.name == name) {
-                        let mut local = HashMap::new();
+                if let Some(class) = self.prog.classes.get(cls.as_str()) {
+                    if let Some(method) = class.methods.get(name) {
+                        let method = Arc::clone(method);
+                        let mut local = Scope::default();
                         local.insert("self".into(), recv.clone());
                         for (p, v) in method.params.iter().skip(1).zip(args) {
                             local.insert(p.clone(), v);
                         }
-                        return self.run_func(method, local);
+                        return self.run_func(&method, local);
                     }
                 }
             }
@@ -580,6 +707,38 @@ impl Interp {
         self.call(name, all)
     }
 
+    /// `filter("pred", seq)` — keep the elements where the named user function
+    /// returns a truthy value.
+    fn filter_hof(&mut self, args: Vec<Value>) -> ER<Value> {
+        if args.len() != 2 {
+            return Err(Signal::Error("filter expects (fn_name, list)".into()));
+        }
+        let fname = args[0].as_str().map_err(Signal::from)?.to_string();
+        let items = builtins::iterate(&args[1]).map_err(Signal::from)?;
+        let mut out = Vec::new();
+        for it in items {
+            if self.call(&fname, vec![it.clone()])?.truthy() {
+                out.push(it);
+                self.note_alloc(1)?;
+            }
+        }
+        Ok(Value::list(out))
+    }
+
+    /// `reduce("fn", seq, init)` — left fold: `acc = fn(acc, item)`.
+    fn reduce_hof(&mut self, args: Vec<Value>) -> ER<Value> {
+        if args.len() != 3 {
+            return Err(Signal::Error("reduce expects (fn_name, list, init)".into()));
+        }
+        let fname = args[0].as_str().map_err(Signal::from)?.to_string();
+        let items = builtins::iterate(&args[1]).map_err(Signal::from)?;
+        let mut acc = args[2].clone();
+        for it in items {
+            acc = self.call(&fname, vec![acc, it])?;
+        }
+        Ok(acc)
+    }
+
     /// `pmap(fn_name, list)` — apply a 1-arg user function to every element of
     /// `list` across worker threads, returning results in input order.
     fn par_map(&mut self, args: Vec<Value>) -> ER<Value> {
@@ -587,12 +746,12 @@ impl Interp {
             return Err(Signal::Error("pmap expects (fn_name, list)".into()));
         }
         let fname = args[0].as_str().map_err(Signal::from)?.to_string();
-        if !self.funcs.contains_key(&fname) {
+        if !self.prog.funcs.contains_key(&fname) {
             return Err(Signal::Error(format!("pmap: unknown function `{}`", fname)));
         }
         let items = builtins::iterate(&args[1]).map_err(Signal::from)?;
         let jobs: Vec<(String, Vec<Value>)> = items.into_iter().map(|it| (fname.clone(), vec![it])).collect();
-        let (vals, outs) = par_calls(Arc::clone(&self.funcs), Arc::clone(&self.classes), jobs)?;
+        let (vals, outs) = par_calls(Arc::clone(&self.prog), jobs)?;
         self.output.extend(outs);
         Ok(Value::list(vals))
     }
@@ -606,7 +765,7 @@ impl Interp {
             return Err(Signal::Error("amap expects (fn_name, list)".into()));
         }
         let fname = args[0].as_str().map_err(Signal::from)?.to_string();
-        if !self.funcs.contains_key(&fname) {
+        if !self.prog.funcs.contains_key(&fname) {
             return Err(Signal::Error(format!("amap: unknown function `{}`", fname)));
         }
         let items = builtins::iterate(&args[1]).map_err(Signal::from)?;
@@ -620,10 +779,10 @@ impl Interp {
                 "serial",
                 &[("items", &items.len().to_string())],
             );
-            let f = self.funcs.get(&fname).cloned().unwrap();
+            let f = Arc::clone(self.prog.funcs.get(&fname).expect("checked above"));
             let mut out = Vec::with_capacity(items.len());
             for it in items {
-                let mut local = HashMap::new();
+                let mut local = Scope::default();
                 if let Some(p) = f.params.first() {
                     local.insert(p.clone(), it);
                 }
@@ -639,18 +798,21 @@ impl Interp {
             &[("items", &items.len().to_string())],
         );
         let jobs: Vec<(String, Vec<Value>)> = items.into_iter().map(|it| (fname.clone(), vec![it])).collect();
-        let (vals, outs) = par_calls(Arc::clone(&self.funcs), Arc::clone(&self.classes), jobs)?;
+        let (vals, outs) = par_calls(Arc::clone(&self.prog), jobs)?;
         self.output.extend(outs);
         Ok(Value::list(vals))
     }
 
     /// Decide whether a comprehension should be transparently parallelized.
-    /// Conservative: only when it is large, the machine has cores to spare, no
-    /// host context is active, auto-par isn't disabled, the body does real work
-    /// (calls a user function), and the body is *provably* side-effect free.
+    /// Conservative: only when it is large, the machine has cores to spare,
+    /// auto-par isn't disabled, the body does real work (calls a user
+    /// function), and the body is *provably* side-effect free. Host-provided
+    /// builtins (e.g. `validate`) can't cross threads, so the purity analysis
+    /// rejects any name that isn't a user function or a known-pure core
+    /// builtin — which is what makes this safe even in mixed programs.
     fn should_auto_parallelize(&mut self, elem: &AExpr, cond: &Option<Box<AExpr>>, n: usize) -> bool {
         const THRESHOLD: usize = 256;
-        if n < THRESHOLD || nexus_accel::cores() <= 1 || self.host.is_some() || !auto_par_enabled() {
+        if n < THRESHOLD || nexus_accel::cores() <= 1 || !auto_par_enabled() {
             return false;
         }
         if !self.body_does_work(elem) {
@@ -672,10 +834,14 @@ impl Interp {
     /// work is substantial enough for threading to pay off).
     fn body_does_work(&self, e: &AExpr) -> bool {
         match e {
-            AExpr::Call(name, args) => self.funcs.contains_key(name) || args.iter().any(|a| self.body_does_work(a)),
+            AExpr::Call(name, args) => {
+                self.prog.funcs.contains_key(name) || args.iter().any(|a| self.body_does_work(a))
+            }
             AExpr::Method(recv, _, args) => {
                 // A method call may be a class method (real work).
-                !self.classes.is_empty() || self.body_does_work(recv) || args.iter().any(|a| self.body_does_work(a))
+                !self.prog.classes.is_empty()
+                    || self.body_does_work(recv)
+                    || args.iter().any(|a| self.body_does_work(a))
             }
             AExpr::Binary(_, a, b) | AExpr::Index(a, b) => self.body_does_work(a) || self.body_does_work(b),
             AExpr::Unary(_, a) => self.body_does_work(a),
@@ -718,36 +884,44 @@ impl Interp {
     }
 
     /// Purity of a called name: impure builtins fail; user functions/constructors
-    /// are analyzed; all other builtins are pure computations.
+    /// are analyzed; core pure builtins pass. Anything else (host-provided
+    /// builtins, typos) is treated as impure so it never crosses a thread.
     fn callee_pure(&mut self, name: &str, visiting: &mut std::collections::HashSet<String>) -> bool {
         if IMPURE_BUILTINS.contains(&name) {
             return false;
         }
-        if self.classes.contains_key(name) {
+        if self.prog.classes.contains_key(name) {
             return self.class_init_pure(name, visiting);
         }
-        if self.funcs.contains_key(name) {
+        if self.prog.funcs.contains_key(name) {
             return self.func_is_pure(name, visiting);
         }
-        true // a standard pure builtin (math/string/list/map/vector/redact/…)
+        builtins::PURE_BUILTINS.contains(&name)
     }
 
     /// Purity of a method name: impure builtins fail; a class method with this
-    /// name must be pure; otherwise it's a pure string/list builtin method.
+    /// name must be pure; otherwise it must be a known-pure builtin.
     fn method_pure(&mut self, name: &str, visiting: &mut std::collections::HashSet<String>) -> bool {
         if IMPURE_BUILTINS.contains(&name) {
             return false;
         }
-        let methods: Vec<Func> = self
+        let is_class_method = self.prog.classes.values().any(|c| c.methods.contains_key(name));
+        if !is_class_method && !builtins::PURE_BUILTINS.contains(&name) {
+            return false;
+        }
+        let methods: Vec<Arc<Func>> = self
+            .prog
             .classes
             .values()
-            .filter_map(|c| c.methods.iter().find(|m| m.name == name).cloned())
+            .filter_map(|c| c.methods.get(name).cloned())
             .collect();
-        methods.iter().all(|m| self.func_body_pure(&format!("method:{}", name), &m.body, visiting))
+        methods
+            .iter()
+            .all(|m| self.func_body_pure(&format!("method:{}", name), &m.body, visiting))
     }
 
     fn class_init_pure(&mut self, class: &str, visiting: &mut std::collections::HashSet<String>) -> bool {
-        let init = self.classes.get(class).and_then(|c| c.methods.iter().find(|m| m.name == "init").cloned());
+        let init = self.prog.classes.get(class).and_then(|c| c.methods.get("init").cloned());
         match init {
             Some(f) => self.func_body_pure(&format!("init:{}", class), &f.body, visiting),
             None => true,
@@ -758,8 +932,8 @@ impl Interp {
         if let Some(&p) = self.pure_cache.get(name) {
             return p;
         }
-        let f = match self.funcs.get(name).cloned() {
-            Some(f) => f,
+        let f = match self.prog.funcs.get(name) {
+            Some(f) => Arc::clone(f),
             None => return false,
         };
         if f.is_generator {
@@ -790,6 +964,7 @@ impl Interp {
     fn stmt_pure(&mut self, s: &Stmt, visiting: &mut std::collections::HashSet<String>) -> bool {
         match s {
             Stmt::Print(_) | Stmt::Yield(_) => false,
+            Stmt::Break | Stmt::Continue => true,
             Stmt::Assign(_, e) | Stmt::Return(e) | Stmt::Throw(e) | Stmt::Expr(e) => self.expr_pure(e, visiting),
             Stmt::IndexAssign(_, idxs, e) => idxs.iter().all(|i| self.expr_pure(i, visiting)) && self.expr_pure(e, visiting),
             Stmt::Try(body, _, handler) => self.stmts_pure(body, visiting) && self.stmts_pure(handler, visiting),
@@ -800,7 +975,7 @@ impl Interp {
     }
 
     /// Evaluate one expression against a scope (entry point for parallel comp workers).
-    pub(crate) fn eval_in(&mut self, e: &AExpr, scope: &mut HashMap<String, Value>) -> ER<Value> {
+    pub(crate) fn eval_in(&mut self, e: &AExpr, scope: &mut Scope) -> ER<Value> {
         self.eval(e, scope)
     }
 
@@ -816,18 +991,19 @@ impl Interp {
             let name = n.as_str().map_err(Signal::from)?.to_string();
             jobs.push((name, Vec::new()));
         }
-        let (vals, outs) = par_calls(Arc::clone(&self.funcs), Arc::clone(&self.classes), jobs)?;
+        let (vals, outs) = par_calls(Arc::clone(&self.prog), jobs)?;
         self.output.extend(outs);
         Ok(Value::list(vals))
     }
 
     fn construct(&mut self, class_name: &str, args: Vec<Value>) -> ER<Value> {
-        let class = self.classes.get(class_name).cloned().unwrap();
-        let mut fields = BTreeMap::new();
+        let class = Arc::clone(self.prog.classes.get(class_name).expect("checked by caller"));
+        let mut fields = std::collections::BTreeMap::new();
         fields.insert("__class__".to_string(), Value::str(class_name));
         let inst = Value::map(fields);
-        if let Some(init) = class.methods.iter().find(|m| m.name == "init") {
-            let mut local = HashMap::new();
+        if let Some(init) = class.methods.get("init") {
+            let init = Arc::clone(init);
+            let mut local = Scope::default();
             local.insert("self".into(), inst.clone());
             for (p, v) in init.params.iter().skip(1).zip(args) {
                 local.insert(p.clone(), v);
@@ -840,13 +1016,27 @@ impl Interp {
     }
 }
 
-/// Builtins (and parallel intercepts) that have side effects or
+/// Insert or update a variable without cloning the key `String` when the
+/// variable already exists (the common case in loops).
+#[inline]
+fn assign(scope: &mut Scope, name: &str, v: Value) {
+    match scope.get_mut(name) {
+        Some(slot) => *slot = v,
+        None => {
+            scope.insert(name.to_string(), v);
+        }
+    }
+}
+
+/// Builtins (and interpreter intercepts) that have side effects or
 /// non-deterministic ordering, so a comprehension body using them must NOT be
 /// auto-parallelized. Pure computations (math/string/list/map/vector/redact/
-/// anonymize/…) are absent and therefore allowed.
+/// anonymize/…) are absent and therefore allowed. `filter`/`reduce` run a
+/// *named* function we don't resolve here, so they stay conservative.
 const IMPURE_BUILTINS: &[&str] = &[
     "sh", "sh_timeout", "psh", "auto_fix", "tool_run", "which", "mp_map", "proc_input", "tcp_request",
-    "tcp_line", "http_get", "trace", "pmap", "amap", "parallel",
+    "tcp_line", "http_get", "trace", "pmap", "amap", "parallel", "filter", "reduce", "now_ms",
+    "read_file", "write_file", "append_file",
 ];
 
 /// Whether transparent auto-parallelization is enabled (default on; set
@@ -859,11 +1049,9 @@ fn auto_par_enabled() -> bool {
 /// Each thread owns a throwaway [`Interp`] and a private clone of the captured
 /// scope; results are reassembled by index so the outcome is identical to the
 /// serial path.
-#[allow(clippy::too_many_arguments)]
 fn par_eval_comp(
-    funcs: Arc<HashMap<String, Func>>,
-    classes: Arc<HashMap<String, Class>>,
-    base_scope: HashMap<String, Value>,
+    prog: Arc<Program>,
+    base_scope: Scope,
     var: String,
     elem: AExpr,
     cond: Option<Box<AExpr>>,
@@ -880,14 +1068,14 @@ fn par_eval_comp(
     while !indexed.is_empty() {
         let take = chunk.min(indexed.len());
         let ch: Vec<(usize, Value)> = indexed.drain(0..take).collect();
-        let (f, c) = (Arc::clone(&funcs), Arc::clone(&classes));
+        let prog = Arc::clone(&prog);
         let (base, elem, cond, var) = (Arc::clone(&base), Arc::clone(&elem), Arc::clone(&cond), var.clone());
         handles.push(std::thread::spawn(move || -> ER<Vec<(usize, Value)>> {
-            let mut w = Interp::from_parts(f, c);
+            let mut w = Interp::from_parts(prog);
             let mut scope = (*base).clone(); // one private scope per thread, reused
             let mut out = Vec::with_capacity(ch.len());
             for (i, item) in ch {
-                scope.insert(var.clone(), item);
+                assign(&mut scope, &var, item);
                 if let Some(cc) = cond.as_ref() {
                     if !w.eval_in(cc, &mut scope)?.truthy() {
                         continue;
@@ -914,11 +1102,7 @@ fn par_eval_comp(
 /// owning a throwaway [`Interp`] over the shared definitions. Results and any
 /// captured `print` output are reassembled in the original job order so the
 /// outcome is deterministic regardless of how work was scheduled.
-fn par_calls(
-    funcs: Arc<HashMap<String, Func>>,
-    classes: Arc<HashMap<String, Class>>,
-    jobs: Vec<(String, Vec<Value>)>,
-) -> ER<(Vec<Value>, Vec<String>)> {
+fn par_calls(prog: Arc<Program>, jobs: Vec<(String, Vec<Value>)>) -> ER<(Vec<Value>, Vec<String>)> {
     let n = jobs.len();
     if n == 0 {
         return Ok((Vec::new(), Vec::new()));
@@ -937,12 +1121,11 @@ fn par_calls(
     while !indexed.is_empty() {
         let take = chunk.min(indexed.len());
         let ch: Vec<(usize, (String, Vec<Value>))> = indexed.drain(0..take).collect();
-        let f = Arc::clone(&funcs);
-        let c = Arc::clone(&classes);
+        let prog = Arc::clone(&prog);
         handles.push(std::thread::spawn(move || -> ER<Vec<(usize, Value, Vec<String>)>> {
             let mut out = Vec::with_capacity(ch.len());
             for (idx, (name, argv)) in ch {
-                let mut w = Interp::from_parts(Arc::clone(&f), Arc::clone(&c));
+                let mut w = Interp::from_parts(Arc::clone(&prog));
                 let v = w.call(&name, argv)?;
                 out.push((idx, v, w.output));
             }
@@ -990,14 +1173,4 @@ fn check_arity(name: &str, params: &[String], got: usize) -> ER<()> {
     } else {
         Ok(())
     }
-}
-
-/// Recursively set `container[i0][i1]... = value`, copy-on-write.
-fn set_path(container: &Value, indices: &[Value], value: Value) -> Result<Value, String> {
-    if indices.len() == 1 {
-        return crate::builtins::index_set(container, &indices[0], value);
-    }
-    let inner = crate::builtins::index_get(container, &indices[0])?;
-    let new_inner = set_path(&inner, &indices[1..], value)?;
-    crate::builtins::index_set(container, &indices[0], new_inner)
 }

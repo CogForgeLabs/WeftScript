@@ -15,6 +15,7 @@
 
 pub mod ast;
 pub mod builtins;
+pub(crate) mod fxhash;
 pub mod interp;
 pub mod json;
 pub mod parser;

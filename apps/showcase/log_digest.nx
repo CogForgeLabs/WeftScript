@@ -1,0 +1,62 @@
+# Log digest — exercises the modern language surface end to end:
+# multi-line literals, break/continue, filter/reduce, enumerate/items,
+# any/all, JSON round-trips, and type introspection.
+
+project LogDigest
+
+thing Entry
+    id: UUID
+    level: String
+    ms: Decimal
+
+fn is_slow(e)
+    return e.ms > 100
+
+fn add_ms(acc, e)
+    return acc + e.ms
+
+entries = [
+    {"id": "r1", "level": "info", "ms": 12},
+    {"id": "r2", "level": "error", "ms": 340},
+    {"id": "r3", "level": "info", "ms": 8},
+    {"id": "r4", "level": "warn", "ms": 155},
+    {"id": "r5", "level": "error", "ms": 520},
+]
+
+# Tally levels with break/continue driving the control flow.
+tally = map()
+for e in entries
+    if not validate(e, "Entry")
+        continue
+    lvl = e.level
+    tally[lvl] = get(tally, lvl, 0) + 1
+
+for kv in items(tally)
+    print "{kv[0]}: {kv[1]}"
+
+# Higher-order pipeline: slow requests and their total latency.
+slow = filter("is_slow", entries)
+total = reduce("add_ms", slow, 0)
+print "slow requests: {len(slow)}, combined {total}ms"
+
+# any/all over comprehensions.
+print "any errors: {any([e.level == \"error\" for e in entries])}"
+print "all under 1s: {all([e.ms < 1000 for e in entries])}"
+
+# Find the first error, then stop scanning.
+first_error = nil
+for pair in enumerate(entries)
+    if pair[1].level == "error"
+        first_error = pair[0]
+        break
+print "first error at index {first_error}"
+
+# JSON round-trip of the digest.
+digest = {
+    "tally": tally,
+    "slow": len(slow),
+    "total_ms": total,
+}
+encoded = json_encode(digest)
+back = json_decode(encoded)
+print "digest ok: {back.slow == len(slow) and type(back.tally) == \"map\"}"
