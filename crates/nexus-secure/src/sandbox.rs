@@ -186,8 +186,13 @@ impl Sandbox {
         let trimmed = cmd.trim();
 
         // 1. Built-in destructive denylist (always enforced, whole string).
+        //    Match against a whitespace-normalized copy so trivial evasions like
+        //    `rm  -rf  /` (extra spaces or tabs) can't slip a pattern past a
+        //    literal `contains`. This is still a best-effort lexical filter, not a
+        //    hard boundary.
+        let normalized = trimmed.split_whitespace().collect::<Vec<_>>().join(" ");
         for pat in DESTRUCTIVE {
-            if trimmed.contains(pat) {
+            if trimmed.contains(pat) || normalized.contains(pat) {
                 let why = format!("command denied: matches destructive pattern {pat:?}");
                 record(Level::Warn, "secure.sandbox", None, why.clone(), &[("cmd", trimmed)]);
                 return Err(why);
@@ -279,6 +284,16 @@ mod tests {
         assert!(sb.check_command("dd if=/dev/zero of=/dev/sda").is_err());
         assert!(sb.check_command("mkfs.ext4 /dev/sda1").is_err());
         assert!(sb.check_command("shutdown -h now").is_err());
+    }
+
+    #[test]
+    fn destructive_denied_despite_extra_whitespace() {
+        // Trivial whitespace evasions of the destructive patterns are caught by
+        // the normalized-string check.
+        let sb = Sandbox::new();
+        assert!(sb.check_command("rm  -rf  /").is_err());
+        assert!(sb.check_command("rm\t-rf\t/").is_err());
+        assert!(sb.check_command("echo hi;   rm  -rf  /").is_err());
     }
 
     #[test]
