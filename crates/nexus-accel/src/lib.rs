@@ -69,9 +69,16 @@ pub fn gpu_name() -> Option<String> {
 #[allow(dead_code)] // referenced only on the `gpu` feature path
 const GPU_MAX: usize = 16_000_000;
 
+/// GPU offload is **opt-in** (`NEXUS_GPU=1`). The GPU kernels compute in f32,
+/// so silently routing f64 work there would quietly drop ~9 significant
+/// digits; correctness wins by default and the speed trade is explicit.
+fn gpu_opted_in() -> bool {
+    matches!(std::env::var("NEXUS_GPU").as_deref(), Ok("1") | Ok("on") | Ok("force"))
+}
+
 #[cfg(feature = "gpu")]
 fn gpu_ready(n: usize) -> bool {
-    n >= GPU_MIN && n <= GPU_MAX && gpu_instance().is_some()
+    gpu_opted_in() && n >= GPU_MIN && n <= GPU_MAX && gpu_instance().is_some()
 }
 #[cfg(not(feature = "gpu"))]
 fn gpu_ready(_n: usize) -> bool {
@@ -354,6 +361,17 @@ mod tests {
         // dot via threads vs scalar reference
         let scalar: f64 = a.iter().zip(&b).map(|(x, y)| x * y).sum();
         assert!((dot(&a, &b) - scalar).abs() < 1e-6);
+    }
+
+    #[test]
+    fn auto_dispatch_preserves_f64_precision() {
+        // Without the NEXUS_GPU opt-in, big dots must stay on the f64 CPU path
+        // bit-for-bit — no silent f32 downgrade inside the GPU size window.
+        let n = 1_500_000;
+        let a: Vec<f64> = (0..n).map(|i| i as f64).collect();
+        assert_eq!(dot(&a, &a), dot_cpu(&a, &a));
+        let (dev, _) = route(n);
+        assert_eq!(dev, Device::Cpu);
     }
 
     #[test]

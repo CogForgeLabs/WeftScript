@@ -601,7 +601,7 @@ pub fn to_markdown(report: &Report) -> String {
     }
     s.push('\n');
 
-    s.push_str("## Drawbacks / Honest limitations\n\n");
+    s.push_str("## Drawbacks / Known limitations\n\n");
     for d in &report.drawbacks {
         s.push_str(&format!("- {d}\n"));
     }
@@ -623,7 +623,7 @@ mod tests {
         assert!(md.contains("Token usage"));
         assert!(md.contains("Formal no-overdraft proof"));
         assert!(md.contains("## Benefits"));
-        assert!(md.contains("## Drawbacks / Honest limitations"));
+        assert!(md.contains("## Drawbacks / Known limitations"));
         assert!(md.contains("Interpreter throughput"));
         assert!(md.contains("Sandbox command check"));
     }
