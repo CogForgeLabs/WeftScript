@@ -291,8 +291,20 @@ pub fn prove(assumptions: &[Predicate], guarantee: &Predicate) -> ProofResult {
         }
         // Entailed sign of each product variable in this case.
         for (p, a, b) in &products {
-            let ia = factors.iter().position(|f| f == a).unwrap();
-            let ib = factors.iter().position(|f| f == b).unwrap();
+            // Invariant: `factors` was built (above) by pushing every `a` and
+            // `b` of every product, deduped by the SAME `==` used here, so both
+            // lookups must succeed. Rather than `unwrap()` — which would panic
+            // on untrusted (`.nexus`-authored) input if that invariant were ever
+            // broken by a refactor — degrade soundly: decline to prove. Bailing
+            // to `Unsupported` is always safe (it never claims a false Proven).
+            let (Some(ia), Some(ib)) = (
+                factors.iter().position(|f| f == a),
+                factors.iter().position(|f| f == b),
+            ) else {
+                return ProofResult::Unsupported {
+                    reason: "internal: bilinear factor missing from factor set".into(),
+                };
+            };
             let pv = LinExpr::var(*p);
             if signs[ia] == signs[ib] {
                 case_atoms.push(Atom::ge(pv)); // p >= 0
@@ -532,6 +544,93 @@ mod tests {
             ProofResult::Unknown { .. } => {} // sound: relaxation too weak
             other => panic!("must not prove a false guarantee, got {:?}", other),
         }
+    }
+
+    // ---- Regression: the bilinear factor-position lookup must never panic. ----
+    //
+    // Lines ~294 formerly did `factors.iter().position(...).unwrap()`. These
+    // cases drive the nonlinear sign-split path with the shapes most likely to
+    // expose an off-by-one in the factor set (distinct products sharing a
+    // factor, repeated factors, nested products, and a self-product/square).
+    // They assert the prover returns a *sound* result (never a false Proven)
+    // and, above all, does not panic while resolving product factor indices.
+
+    #[test]
+    fn nonlinear_shared_factor_does_not_panic() {
+        // Two products that share the factor `x`: x*y and x*z.
+        // Reaches the factor-position lookup for x (twice), y, and z.
+        let assumptions = vec![
+            pred(var("x"), CmpOp::Ge, num(0)),
+            pred(var("y"), CmpOp::Ge, num(0)),
+            pred(var("z"), CmpOp::Ge, num(0)),
+        ];
+        // guarantee: x*y + x*z >= 0  (true for nonneg vars) — must be sound.
+        let guarantee = pred(
+            Expr::Bin(
+                BinOp::Add,
+                Box::new(mul(var("x"), var("y"))),
+                Box::new(mul(var("x"), var("z"))),
+            ),
+            CmpOp::Ge,
+            num(0),
+        );
+        // Must not panic; must not falsely refute a true guarantee.
+        assert!(prove(&assumptions, &guarantee).is_proven());
+    }
+
+    #[test]
+    fn nonlinear_repeated_and_square_factors_do_not_panic() {
+        // A product and its mirror x*y / y*x plus a square x*x: exercises the
+        // factor dedup (up to ordering) and the a == b self-product branch that
+        // makes both position() lookups resolve to the same factor entry.
+        let guarantee = pred(
+            Expr::Bin(
+                BinOp::Add,
+                Box::new(Expr::Bin(
+                    BinOp::Sub,
+                    Box::new(mul(var("x"), var("y"))),
+                    Box::new(mul(var("y"), var("x"))),
+                )),
+                Box::new(mul(var("x"), var("x"))),
+            ),
+            CmpOp::Ge,
+            num(0),
+        );
+        // x*y - y*x + x*x == x*x >= 0. Whatever the prover concludes, it must
+        // not panic and must not report a spurious model.
+        match prove(&[], &guarantee) {
+            ProofResult::Proven | ProofResult::Unknown { .. } => {}
+            ProofResult::Violated { model } => {
+                assert!(model.keys().all(|k| !k.starts_with("__prod_")));
+            }
+            other => panic!("unexpected sound-but-wrong result: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn nonlinear_nested_product_does_not_panic() {
+        // (x*y)*z — a nested bilinear whose inner product becomes a product
+        // variable that then appears as a factor of the outer product. This is
+        // the case where a factor is itself synthetic; the position lookup must
+        // still find it (or degrade to Unsupported) rather than unwrap-panic.
+        let assumptions = vec![
+            pred(var("x"), CmpOp::Ge, num(0)),
+            pred(var("y"), CmpOp::Ge, num(0)),
+            pred(var("z"), CmpOp::Ge, num(0)),
+        ];
+        let guarantee = pred(
+            mul(mul(var("x"), var("y")), var("z")),
+            CmpOp::Ge,
+            num(0),
+        );
+        // Must terminate without panicking and never falsely claim Proven if it
+        // cannot soundly do so; here it may be Proven or Unknown — both sound.
+        let res = prove(&assumptions, &guarantee);
+        assert!(
+            matches!(res, ProofResult::Proven | ProofResult::Unknown { .. }),
+            "nested product must be sound (Proven/Unknown), got {:?}",
+            res
+        );
     }
 
     #[test]
