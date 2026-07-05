@@ -554,6 +554,14 @@ pub fn cmd_mcp() -> Result<(), String> {
 }
 
 pub fn cmd_bench(args: &[String]) -> Result<(), String> {
+    // The suite is slow to run, so guard against `weft bench --help` (or any
+    // unknown flag) silently kicking off a full benchmark instead of showing help.
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("usage: weft bench [--write]");
+        println!("  Run the benchmark suite and print a Markdown report.");
+        println!("  --write   also write the report to BENCHMARKS.md");
+        return Ok(());
+    }
     let report = bench::run();
     let md = bench::to_markdown(&report);
     print!("{md}");
