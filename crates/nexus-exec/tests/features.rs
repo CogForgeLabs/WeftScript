@@ -246,6 +246,24 @@ catch e
     assert_eq!(run_source(src).unwrap(), vec!["caught"]);
 }
 
+// ---- recursion guard ---------------------------------------------------------
+
+#[test]
+fn unbounded_recursion_is_a_catchable_error_not_a_stack_overflow() {
+    // A function that calls itself forever must return a catchable runtime error
+    // (call-depth cap) instead of overflowing the native stack, which would
+    // abort the whole process.
+    let src = "\
+fn loop_forever(n)
+    return loop_forever(n + 1)
+try
+    loop_forever(0)
+catch e
+    print \"caught\"
+";
+    assert_eq!(run_source(src).unwrap(), vec!["caught"]);
+}
+
 // ---- files -------------------------------------------------------------------
 
 #[test]

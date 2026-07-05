@@ -147,7 +147,24 @@ pub struct Interp {
     yield_sink: Option<SyncSender<StreamMsg>>,
     /// Memoized purity of user functions, for transparent auto-parallelization.
     pure_cache: FxHashMap<String, bool>,
+    /// Current user-function call nesting. Guards against unbounded recursion
+    /// overflowing the native stack (an uncatchable abort) before the step or
+    /// wall-clock budget can trip. See [`MAX_CALL_DEPTH`].
+    call_depth: u32,
 }
+
+/// Ceiling on user-function call nesting. A recursive `.nx` program deeper than
+/// this gets a catchable runtime error instead of a stack-overflow abort.
+///
+/// The bound must be safe on the *smallest* stack any interpreter runs on: the
+/// main CLI path uses a 64 MiB worker thread, but generator bodies and the
+/// parallel builtins (`pmap`/`parallel`) spawn worker threads with the default
+/// stack (~1-2 MiB), and library callers of `run_source` run on the caller's
+/// thread. Each interpreter frame is heavy (a full `eval`/`exec_block` chain),
+/// so we keep this conservative. 128 matches the parser's `MAX_EXPR_DEPTH`
+/// (already proven safe on the default stack) and is deeper than any realistic
+/// call nesting while staying clear of a 1 MiB stack.
+const MAX_CALL_DEPTH: u32 = 128;
 
 impl Interp {
     pub fn new(app: &App) -> Interp {
@@ -170,6 +187,7 @@ impl Interp {
             host: None,
             yield_sink: None,
             pure_cache: FxHashMap::default(),
+            call_depth: 0,
         }
     }
 
@@ -614,8 +632,19 @@ impl Interp {
         if f.is_generator {
             return Ok(self.spawn_generator(f, local));
         }
+        // Bound recursion so a runaway self-call returns a catchable error
+        // instead of overflowing the native stack (which would abort the whole
+        // process, uncatchable even under `run-guarded`).
+        if self.call_depth >= MAX_CALL_DEPTH {
+            return Err(Signal::Error(format!(
+                "maximum call depth exceeded ({MAX_CALL_DEPTH}); possible unbounded recursion"
+            )));
+        }
+        self.call_depth += 1;
         let mut local = local;
-        match self.exec_block(&f.body, &mut local)? {
+        let result = self.exec_block(&f.body, &mut local);
+        self.call_depth -= 1;
+        match result? {
             Flow::Return(v) => Ok(v),
             Flow::Normal => Ok(Value::Nil),
             Flow::Break => Err(Signal::Error("`break` outside a loop".into())),
