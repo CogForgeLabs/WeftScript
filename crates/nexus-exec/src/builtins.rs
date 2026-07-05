@@ -526,7 +526,10 @@ pub fn call(name: &str, args: &[Value]) -> ER<Value> {
             let n = args[1].as_num()?.max(0.0) as usize;
             match &args[0] {
                 Value::Stream(s) => {
-                    let mut out = Vec::with_capacity(n);
+                    // Bound only the pre-allocation hint, not the take count: a
+                    // huge `n` (e.g. 1e15) must not request a petabyte buffer
+                    // up front. The loop still honors `n` and grows as needed.
+                    let mut out = Vec::with_capacity(n.min(4096));
                     for _ in 0..n {
                         match s.next() {
                             Some(Ok(v)) => out.push(v),
