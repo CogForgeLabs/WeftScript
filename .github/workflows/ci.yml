@@ -1,9 +1,9 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  # Auto-run on push/PR disabled at maintainer request; run manually via the
+  # Actions tab (workflow_dispatch). Revert this commit to restore auto-triggers.
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
