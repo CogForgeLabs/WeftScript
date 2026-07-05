@@ -4,6 +4,15 @@
 
 use crate::lexer::{lex_line, LexError, Tok};
 
+/// Ceiling on block-nesting depth (indentation levels). Building the block tree
+/// recurses once per level, and every downstream consumer (the DSL parser and
+/// the executable-layer statement parser) recurses over the same tree, so an
+/// unbounded nest would overflow the native stack — an uncatchable process
+/// abort reachable from an ordinary, deeply-indented source file. Past this
+/// limit we return a clean lex/parse error instead. 512 is far deeper than any
+/// real program indents while staying safe on a default ~1 MiB stack.
+const MAX_BLOCK_DEPTH: usize = 512;
+
 /// One logical line plus the block lines nested beneath it.
 #[derive(Debug, Clone)]
 pub struct Block {
@@ -82,7 +91,7 @@ pub fn build_blocks(src: &str) -> Result<Vec<Block>, LexError> {
         });
     }
     let mut pos = 0;
-    Ok(parse_level(&raws, &mut pos, 0))
+    parse_level(&raws, &mut pos, 0, 0)
 }
 
 /// Net bracket/brace/paren depth change across a token run. Brackets inside
@@ -101,7 +110,14 @@ fn bracket_delta(toks: &[Tok]) -> i64 {
 
 /// Recursively collect blocks whose indent is `>= min_indent`, nesting deeper
 /// lines under the block that introduced them.
-fn parse_level(raws: &[Raw], pos: &mut usize, min_indent: usize) -> Vec<Block> {
+fn parse_level(raws: &[Raw], pos: &mut usize, min_indent: usize, depth: usize) -> Result<Vec<Block>, LexError> {
+    if depth > MAX_BLOCK_DEPTH {
+        let line = raws.get(*pos).map(|r| r.line_no).unwrap_or(0);
+        return Err(LexError {
+            line,
+            msg: format!("block nesting too deep (limit {MAX_BLOCK_DEPTH}); check indentation"),
+        });
+    }
     let mut out = Vec::new();
     while *pos < raws.len() {
         let cur = &raws[*pos];
@@ -113,10 +129,10 @@ fn parse_level(raws: &[Raw], pos: &mut usize, min_indent: usize) -> Vec<Block> {
         let line_no = cur.line_no;
         let toks = cur.toks.clone();
         *pos += 1;
-        let children = parse_level(raws, pos, this_indent + 1);
+        let children = parse_level(raws, pos, this_indent + 1, depth + 1)?;
         out.push(Block { line_no, indent: this_indent, toks, children });
     }
-    out
+    Ok(out)
 }
 
 fn strip_comment(line: &str) -> String {
@@ -159,5 +175,29 @@ mod tests {
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].head(), Some("project"));
         assert_eq!(blocks[1].head(), Some("event"));
+    }
+
+    #[test]
+    fn deep_indentation_is_a_clean_error_not_a_stack_overflow() {
+        // Each line indented one space deeper than the last would recurse
+        // `parse_level` once per line. Past the nesting cap it must return a
+        // clean error instead of overflowing the stack.
+        let mut src = String::new();
+        for i in 0..(MAX_BLOCK_DEPTH + 50) {
+            src.push_str(&" ".repeat(i));
+            src.push_str("a\n");
+        }
+        let err = build_blocks(&src).unwrap_err();
+        assert!(err.msg.contains("too deep"), "got: {}", err.msg);
+    }
+
+    #[test]
+    fn nesting_within_the_limit_still_builds() {
+        let mut src = String::new();
+        for i in 0..64 {
+            src.push_str(&" ".repeat(i));
+            src.push_str("a\n");
+        }
+        assert!(build_blocks(&src).is_ok());
     }
 }

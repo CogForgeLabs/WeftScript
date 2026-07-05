@@ -251,15 +251,21 @@ fn classify_number(num: &str, suffix: &str) -> Result<Tok, String> {
     let whole: u64 = num.parse().map_err(|_| {
         format!("unit suffix '{}' requires an integer, got '{}'", suffix, num)
     })?;
+    // Checked multiplication: an oversized literal like `18446744073709TB`
+    // returns a clean lex error rather than overflowing (a debug-build panic /
+    // silent release wrap).
+    let scale = |n: u64, factor: u64| -> Result<u64, String> {
+        n.checked_mul(factor).ok_or_else(|| format!("numeric literal '{num}{suffix}' overflows"))
+    };
     match suffix {
         "B" => Ok(Tok::Bytes(whole)),
-        "KB" => Ok(Tok::Bytes(whole * 1024)),
-        "MB" => Ok(Tok::Bytes(whole * 1024 * 1024)),
-        "GB" => Ok(Tok::Bytes(whole * 1024 * 1024 * 1024)),
-        "TB" => Ok(Tok::Bytes(whole * 1024 * 1024 * 1024 * 1024)),
+        "KB" => Ok(Tok::Bytes(scale(whole, 1024)?)),
+        "MB" => Ok(Tok::Bytes(scale(whole, 1024 * 1024)?)),
+        "GB" => Ok(Tok::Bytes(scale(whole, 1024 * 1024 * 1024)?)),
+        "TB" => Ok(Tok::Bytes(scale(whole, 1024 * 1024 * 1024 * 1024)?)),
         "ms" => Ok(Tok::Duration(whole)),
-        "s" => Ok(Tok::Duration(whole * 1000)),
-        "m" => Ok(Tok::Duration(whole * 60_000)),
+        "s" => Ok(Tok::Duration(scale(whole, 1000)?)),
+        "m" => Ok(Tok::Duration(scale(whole, 60_000)?)),
         other => Err(format!("unknown unit suffix '{}'", other)),
     }
 }
@@ -297,6 +303,14 @@ mod tests {
         assert_eq!(lex_line("max_memory: 2GB", 1).unwrap()[2], Tok::Bytes(2 * 1024 * 1024 * 1024));
         assert_eq!(lex_line("t: 1500ms", 1).unwrap()[2], Tok::Duration(1500));
         assert_eq!(lex_line("b: $0.025", 1).unwrap()[2], Tok::Money("0.025".into()));
+    }
+
+    #[test]
+    fn oversized_unit_literal_is_a_clean_error_not_an_overflow() {
+        // A TB literal whose scaled value exceeds u64 must report an error
+        // rather than overflow-panic (debug) or silently wrap (release).
+        let err = lex_line("x: 18446744073709TB", 1).unwrap_err();
+        assert!(err.msg.contains("overflow"), "got: {}", err.msg);
     }
 
     #[test]

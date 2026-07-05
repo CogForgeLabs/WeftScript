@@ -217,7 +217,7 @@ fn parse_thing(b: &Block) -> PResult<Thing> {
         let ty = parse_type(&c.toks, &mut idx, c.line_no)?;
         let mut policy = None;
         if c.toks.get(idx) == Some(&Tok::Ident("policy".into())) {
-            policy = Some(as_ident(&c.toks[idx + 1], c.line_no)?);
+            policy = Some(ident_tok_at(&c.toks, idx + 1, c.line_no)?);
         }
         fields.push(Field { name: fname, ty, policy });
     }
@@ -232,8 +232,8 @@ fn parse_capability(b: &Block) -> PResult<Capability> {
         match c.head() {
             Some("signature") => {
                 for line in &c.children {
-                    let key = as_ident(&line.toks[0], line.line_no)?;
-                    let pairs = parse_named_type_list(&line.toks[2..], line.line_no)?;
+                    let key = ident_tok_at(&line.toks, 0, line.line_no)?;
+                    let pairs = parse_named_type_list(toks_after(&line.toks, 2, line.line_no)?, line.line_no)?;
                     match key.as_str() {
                         "input" => signature.inputs = pairs,
                         "output" => signature.outputs = pairs,
@@ -280,7 +280,7 @@ fn parse_intent(b: &Block) -> PResult<Intent> {
     let mut constraints = Vec::new();
     for c in &b.children {
         match c.head() {
-            Some("input") => inputs = parse_named_type_list(&c.toks[2..], c.line_no)?,
+            Some("input") => inputs = parse_named_type_list(toks_after(&c.toks, 2, c.line_no)?, c.line_no)?,
             Some("goal") => {
                 for g in &c.children {
                     goals.push(statement(&g.toks, g.line_no)?);
@@ -319,7 +319,7 @@ fn parse_agent(b: &Block) -> PResult<Agent> {
                 }
                 metric = Some(Metric { name: mname, objectives });
             }
-            Some("tools") => tools = parse_ident_list(&c.toks[2..], c.line_no)?,
+            Some("tools") => tools = parse_ident_list(toks_after(&c.toks, 2, c.line_no)?, c.line_no)?,
             Some("constraint") => constraints.push(ident_at(c, 1)?),
             _ => return Err(err(c.line_no, "unexpected line in agent")),
         }
@@ -351,11 +351,11 @@ fn parse_step(b: &Block) -> PResult<Step> {
         match c.head() {
             Some("intent") => s.intent = Some(ident_at(c, 1)?),
             Some("agent") => s.agent = Some(ident_at(c, 1)?),
-            Some("need") => s.need = Some(as_ident(&c.toks[2], c.line_no)?),
+            Some("need") => s.need = Some(ident_tok_at(&c.toks, 2, c.line_no)?),
             Some("contract") => s.contract = Some(ident_at(c, 1)?),
             Some("deterministic") => s.deterministic = Some(bool_at(c, 1)?),
             Some("reasoning") => s.reasoning = Some(qual_at(c, 1)?),
-            Some("tools") => s.tools = parse_ident_list(&c.toks[2..], c.line_no)?,
+            Some("tools") => s.tools = parse_ident_list(toks_after(&c.toks, 2, c.line_no)?, c.line_no)?,
             Some("fallback") => s.fallback = Some(parse_fallback(c)?),
             _ => return Err(err(c.line_no, "unexpected line in step")),
         }
@@ -368,8 +368,8 @@ fn parse_fallback(b: &Block) -> PResult<Fallback> {
     for c in &b.children {
         match c.head() {
             Some("retry") => {
-                fb.retry = Some(match &c.toks[1] {
-                    Tok::Number(n) => n.parse().map_err(|_| err(c.line_no, "bad retry count"))?,
+                fb.retry = Some(match c.toks.get(1) {
+                    Some(Tok::Number(n)) => n.parse().map_err(|_| err(c.line_no, "bad retry count"))?,
                     _ => return Err(err(c.line_no, "expected retry count")),
                 });
             }
@@ -392,6 +392,21 @@ fn as_ident(t: &Tok, line: usize) -> PResult<String> {
         Tok::Ident(s) => Ok(s.clone()),
         _ => Err(err(line, "expected identifier")),
     }
+}
+
+/// Slice `toks[n..]`, but return a clean parse error instead of panicking when
+/// the line is too short (a truncated directive like a bare `tools` or `input`).
+fn toks_after(toks: &[Tok], n: usize, line: usize) -> PResult<&[Tok]> {
+    if toks.len() < n {
+        return Err(err(line, "directive is missing its arguments"));
+    }
+    Ok(&toks[n..])
+}
+
+/// Read the single token at `idx` as an identifier, erroring (not panicking) if
+/// the line is too short.
+fn ident_tok_at(toks: &[Tok], idx: usize, line: usize) -> PResult<String> {
+    as_ident(toks.get(idx).ok_or_else(|| err(line, "missing identifier"))?, line)
 }
 
 fn ident_at(b: &Block, idx: usize) -> PResult<String> {
@@ -442,13 +457,25 @@ fn statement(toks: &[Tok], line: usize) -> PResult<String> {
     Ok(parts.join(" "))
 }
 
+/// Ceiling on nested list-type depth (`[[[...]]]`). A deeper annotation would
+/// recurse the stack without bound during parse (and again on every later
+/// hash/clone/compare of the resulting `Ty`), so it is refused here.
+const MAX_TYPE_DEPTH: usize = 64;
+
 /// Parse a possibly-nested type starting at `*idx`, advancing it.
 fn parse_type(toks: &[Tok], idx: &mut usize, line: usize) -> PResult<Ty> {
+    parse_type_depth(toks, idx, line, 0)
+}
+
+fn parse_type_depth(toks: &[Tok], idx: &mut usize, line: usize, depth: usize) -> PResult<Ty> {
+    if depth > MAX_TYPE_DEPTH {
+        return Err(err(line, "list type nested too deeply"));
+    }
     let base = as_ident(toks.get(*idx).ok_or_else(|| err(line, "expected type"))?, line)?;
     *idx += 1;
     if toks.get(*idx) == Some(&Tok::LBracket) {
         *idx += 1;
-        let inner = parse_type(toks, idx, line)?;
+        let inner = parse_type_depth(toks, idx, line, depth + 1)?;
         if toks.get(*idx) != Some(&Tok::RBracket) {
             return Err(err(line, "expected ']' closing list type"));
         }
@@ -588,9 +615,15 @@ fn parse_mul(toks: &[Tok], i: &mut usize, line: usize) -> PResult<Expr> {
 }
 
 fn parse_primary(toks: &[Tok], i: &mut usize, line: usize) -> PResult<Expr> {
-    // Unary minus: negate a numeric literal, or `0 - expr` otherwise.
-    if toks.get(*i) == Some(&Tok::Minus) {
+    // Unary minus: negate a numeric literal, or `0 - expr` otherwise. Count the
+    // leading minuses in a loop rather than recursing per sign, so a pathological
+    // `-------5` cannot overflow the stack; apply their combined parity once.
+    let mut neg = false;
+    while toks.get(*i) == Some(&Tok::Minus) {
+        neg = !neg;
         *i += 1;
+    }
+    if neg {
         let inner = parse_primary(toks, i, line)?;
         return Ok(match inner {
             Expr::Lit(Literal::Number(r)) => Expr::Lit(Literal::Number(Rational::new(-r.num, r.den))),
