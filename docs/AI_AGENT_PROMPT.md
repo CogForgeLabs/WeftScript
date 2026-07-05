@@ -16,11 +16,13 @@ with `weft app file.nx`.
 1. **Indentation defines blocks** (4 spaces). No braces, no semicolons.
 2. **Comments** start with `#`.
 3. **All numbers are 64-bit floats.** Integer values print without `.0`.
+   Scientific notation works: `1e15`, `2.5e-3`.
 4. **Strings interpolate with `{ }`**: `"x is {a + b}"`. Escapes: `\" \n \t \r \\`.
    - Because `{ }` means interpolation, do NOT put a literal `{` in a string.
      For deferred command templates use the `<key>` form (see `tool_run`).
-5. **List and map literals must be on a SINGLE line.** Never split `[ ... ]` or
-   `{ ... }` across lines. Build big structures with loops/comprehensions instead.
+5. **List and map literals may span multiple lines.** A line with an unclosed
+   `[`, `{`, or `(` continues onto the next line(s) until it closes; trailing
+   commas are fine. Call argument lists may be split the same way.
 6. **Logging is `trace(...)`, not `log(...)`** — `log` is the natural logarithm.
 7. Top-level statements run directly (script mode). You may also use an
    `app Name` / `main` structure, but plain scripts are simplest — prefer them.
@@ -33,8 +35,8 @@ with `weft app file.nx`.
 x = 10
 x += 5                      # compound: += -= *= /=
 ok = x > 3 and x < 100      # and / or / not
-xs = [1, 2, 3]              # list (one line!)
-m  = {"a": 1, "b": 2}       # map, string keys (one line!)
+xs = [1, 2, 3]              # list
+m  = {"a": 1, "b": 2}       # map (string keys); both may span lines
 
 # strings
 print "sum={x + 1}"
@@ -53,6 +55,14 @@ for i in range(1, 5)        # 1,2,3,4 ; range(n) is 0..n-1 ; range(a,b,step)
 
 while x > 0
     x -= 1
+
+# break / continue work in for and while loops
+for n in range(100)
+    if n % 2 == 0
+        continue            # skip to next iteration
+    if n > 10
+        break               # exit the innermost loop
+    print n
 
 # functions & recursion
 fn fib(n)
@@ -76,7 +86,7 @@ try
 catch e
     print e
 
-# generators (eager: yield collects into a list)
+# generators (lazy streams; printing a finite one materializes it)
 fn evens(n)
     i = 0
     while i < n
@@ -127,9 +137,14 @@ A `record` is just a map: `{"id": "a1", "balance": 100}`.
 ## Standard library (cheat-sheet)
 
 - **Math:** `abs ceil floor round(x[,n]) sqrt sin cos tan log exp pi pow int min max sum avg/mean inf`
-- **Strings:** `upper lower trim split(s,sep) join(list,sep) replace(s,a,b) contains starts_with ends_with substr(s,start,len) repeat ord chr find/index_of rjust ljust len str num`
-- **Lists:** `range push(l,x) sort sort_desc reverse unique slice(l,a,b) first last count(l,x) zip len`
-- **Maps:** `map() set(m,k,v) get(m,k[,default]) has(m,k) keys values`
+- **Strings:** `upper lower trim split(s,sep) join(list,sep) replace(s,a,b) contains starts_with ends_with substr(s,start,len) repeat ord chr find/index_of rjust ljust lines(s) len str num`
+- **Lists:** `range push(l,x) sort sort_desc reverse unique slice(l,a,b) first last count(l,x) zip enumerate(l) any(l) all(l) len`
+- **Higher-order (pass the function NAME as a string):** `filter("pred",l)` keeps truthy elements, `reduce("fn",l,init)` left-folds `acc = fn(acc, x)`
+- **Maps:** `map() set(m,k,v) get(m,k[,default]) has(m,k) keys values items(m)` (list of `[k,v]` pairs), `del(m,k)`
+- **JSON:** `json_encode(v)` → string, `json_decode(s)` → value (errors are catchable)
+- **Files:** `read_file(path)` → string, `write_file(path,text)`, `append_file(path,text)`
+- **Time:** `now_ms()` → milliseconds since the epoch
+- **Types:** `type(v)` → `"num" | "str" | "bool" | "list" | "map" | "stream" | "nil"`
 - **Parallel/concurrent:** `pmap("fn",list)` (threads, order kept), `amap("fn",list)` (auto serial/threaded), `parallel(["f","g"])` (run 0-arg fns concurrently)
 - **Multiprocessing:** `mp_map(src, list)` runs `src` once per item in a separate OS process; the child reads its item via `proc_input()` (it's auto-bound to a variable named `input`). Example: `mp_map("print input * input", [2,3,4])` → `["4","9","16"]`.
 - **Streaming:** generators (`yield`) are lazy streams. Consume with a `for` loop, `take(stream, n)` (finite prefix — required for infinite generators), or `collect(stream)` (to a list). `print` of a finite generator materializes it.
@@ -155,13 +170,13 @@ A `record` is just a map: `{"id": "a1", "balance": 100}`.
 
 ## Common mistakes to avoid
 
-- ❌ Multi-line `[ ... ]` literals → ✅ keep on one line or build with a loop.
-- ❌ Literal `{` inside a string → ✅ it will be parsed as interpolation.
+- ❌ Literal `{` inside a string → ✅ it will be parsed as interpolation
+  (use `{{` for a literal brace).
 - ❌ `log("hi")` to log → ✅ `trace("hi")` (`log` is math).
 - ❌ `def`/`lambda`/`import`/`None`/`True` → ✅ `fn`, no lambdas, no imports,
   `nil`, `true`/`false`.
-- ❌ Passing a function value to `pmap`/`amap` → ✅ pass its **name as a string**:
-  `pmap("sq", xs)`.
+- ❌ Passing a function value to `pmap`/`amap`/`filter`/`reduce` → ✅ pass its
+  **name as a string**: `pmap("sq", xs)`, `filter("keep", xs)`.
 - ❌ Forgetting `self` as the first method parameter → ✅ always include it.
 
 ## Worked example (mixed: schema + proof + parallel + privacy)
@@ -200,7 +215,7 @@ trace("scored {len(clean)} applicants")
 ```
 
 When asked to write Weft, output a complete `.nx` program that runs with
-`weft app <file>.nx`. Keep literals on single lines, use `trace` for logging,
+`weft app <file>.nx`. Use `trace` for logging,
 pass function names as strings to the parallel builtins, and prefer the
 declarative layer (`thing`/`constraint`/`guarantee` + `validate`/`check`/`prove`)
 whenever correctness matters.

@@ -20,7 +20,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license-file = "LICENSE"
 authors = ["Cognitive Industries / CogForgeLabs <contact@cognitive-industries.org>"]
@@ -51,9 +51,11 @@ nexus-dashboard = { path = "crates/nexus-dashboard" }
 nexus-app = { path = "crates/nexus-app" }
 
 # Lean, fast release profile — supports the "less resource usage" goal.
+# Note: panic stays "unwind" (the default) because the parallel builtins
+# recover from worker-thread panics via `JoinHandle::join`; `panic = "abort"`
+# would turn any worker panic into a whole-process abort.
 [profile.release]
 opt-level = 3
 lto = "thin"
 codegen-units = 1
-panic = "abort"
 strip = true

@@ -19,3 +19,9 @@ Thumbs.db
 /tmp
 
 .claude/
+
+.env
+
+# Local media production (promo video) — not part of the language repo
+/output/
+/video/

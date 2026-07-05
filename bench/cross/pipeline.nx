@@ -1,0 +1,38 @@
+# Capability-parity pipeline: schema validation, constraint check, PARALLEL
+# CPU-bound scoring, PII redaction, file output, invariant verification.
+# Everything below is built into the language and runtime.
+
+project Orders
+
+thing Order
+    id: UUID
+    amount: Decimal
+    email: String
+
+constraint NonNegative
+    amount >= 0
+
+fn make(i)
+    return {"id": "ord-{i}", "amount": i * 7 % 500, "email": "user{i}@corp.com"}
+
+fn score(o)
+    s = 0
+    j = 0
+    while j < 200
+        s += sqrt(o.amount * j + 1)
+        j += 1
+    return round(s, 1)
+
+orders = [make(i) for i in range(2000)]
+valid = [o for o in orders if validate(o, "Order") and check(o, "NonNegative")]
+scores = amap("score", valid)          # parallel across all cores, order kept
+
+top = 0
+for s in scores
+    if s > top
+        top = s
+
+report = "orders={len(valid)} top={top} contact={valid[0].email}"
+print redact(report)
+write_file("pipeline_report.txt", redact(report))
+print "invariant holds: {all([o.amount >= 0 for o in valid])}"

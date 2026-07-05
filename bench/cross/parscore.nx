@@ -1,0 +1,14 @@
+# CPU-bound scoring of 20k items. The comprehension body is pure and calls a
+# user function, so the runtime parallelizes it across all cores automatically —
+# this file contains zero explicit parallel code.
+fn score(x)
+    s = 0
+    i = 0
+    while i < 50
+        s += sqrt(x * i + 1)
+        i += 1
+    return s
+
+data = range(20000)
+scores = [score(x) for x in data]
+print round(sum(scores) / 1000000, 3)

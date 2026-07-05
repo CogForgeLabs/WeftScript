@@ -66,7 +66,7 @@ optimized C builtins; this advantage is honest but is mostly *startup*, not
 
 ## Authoring friction — what it was like for an LLM to write these
 
-Honest notes from building the apps:
+Notes from building the apps:
 
 * **The base system could not do this at all.** Intents carried no executable
   logic; I had to add a whole interpreter (`nexus-exec`) and extend the lexer

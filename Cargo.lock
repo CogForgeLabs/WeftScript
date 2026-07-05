@@ -590,14 +590,14 @@ dependencies = [
 
 [[package]]
 name = "nexus-accel"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "nexus-gpu",
 ]
 
 [[package]]
 name = "nexus-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "nexus-core",
  "nexus-dsl",
@@ -607,7 +607,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-capability"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "nexus-core",
  "serde",
@@ -616,7 +616,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "nexus-accel",
  "nexus-app",
@@ -638,7 +638,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "blake3",
  "serde",
@@ -647,7 +647,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-dashboard"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "nexus-app",
  "nexus-core",
@@ -655,7 +655,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-dsl"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "nexus-core",
  "serde",
@@ -663,7 +663,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-exec"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "nexus-accel",
  "nexus-core",
@@ -675,7 +675,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-gpu"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytemuck",
  "pollster",
@@ -684,7 +684,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-graph"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "nexus-core",
  "nexus-dsl",
@@ -693,7 +693,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-optimize"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "nexus-core",
  "nexus-dsl",
@@ -703,7 +703,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-planner"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "nexus-core",
  "nexus-dsl",
@@ -711,7 +711,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-runtime"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "nexus-core",
  "nexus-planner",
@@ -719,7 +719,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-secure"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "blake3",
  "nexus-core",
@@ -727,14 +727,14 @@ dependencies = [
 
 [[package]]
 name = "nexus-tool"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "nexus-core",
 ]
 
 [[package]]
 name = "nexus-verify"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "nexus-core",
 ]

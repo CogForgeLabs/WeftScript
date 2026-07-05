@@ -1,0 +1,5 @@
+# Dot product of two 2M-element vectors. `vdot` dispatches to SIMD + threads
+# automatically; the program stays one line of intent.
+n = 2000000
+a = range(n)
+print round(vdot(a, a) / 1e15, 3)

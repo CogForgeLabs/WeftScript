@@ -83,6 +83,7 @@ person = {"name": "Ada", "age": 36}   # map (string keys)
 
 Assignment is `=`. Compound assignment: `+= -= *= /=`.
 Integer-valued numbers print without a trailing `.0` (`42`, not `42.0`).
+Scientific notation is supported: `1e15`, `2.5e-3`, `6.02E+23`.
 
 ### 3.2 Operators
 
@@ -127,6 +128,12 @@ for i in range(1, 5)         # 1,2,3,4
 
 while x > 0
     x = x - 1
+
+for n in range(100)          # break / continue work in both loop kinds
+    if n % 2 == 0
+        continue             # skip to the next iteration
+    if n > 10
+        break                # exit the innermost loop
 ```
 
 `for ... in` iterates lists, string characters, or map keys.
@@ -211,7 +218,45 @@ evens   = [n for n in range(11) if n % 2 == 0]    # [0, 2, 4, 6, 8, 10]
 Lists: `[...]`, index with `xs[i]` (negative indexes from the end), assign with
 `xs[i] = v`. Maps: `{"k": v}`, access with `m.k` or `m["k"]` or `get(m, "k")`.
 
-> **Limitation:** list/map literals must be written on a **single line**.
+Literals (and call argument lists) may span multiple lines — a line with an
+unclosed `[`, `{`, or `(` continues until it closes, and trailing commas are
+allowed:
+
+```
+people = [
+    {"name": "Ada", "age": 36},
+    {"name": "Bob", "age": 41},
+]
+```
+
+### 3.11 Everyday builtins
+
+Beyond math/string/list/map basics (see the cheat-sheet in
+`docs/AI_AGENT_PROMPT.md`), these cover the common day-to-day needs:
+
+```
+adults = filter("is_adult", people)     # keep elements where the fn is truthy
+total  = reduce("add", [1, 2, 3], 0)    # left fold: acc = add(acc, x)
+print any([false, true]), all([1, 2])   # truthiness over a list
+for pair in enumerate(["a", "b"])       # [index, value] pairs
+    print pair[0], pair[1]
+for kv in items({"a": 1})               # [key, value] pairs
+    print kv[0], kv[1]
+m = del(m, "obsolete_key")              # map without a key
+print type(x)                           # "num" / "str" / "list" / "map" / ...
+
+s = json_encode({"a": [1, 2]})          # value -> JSON string
+v = json_decode(s)                      # JSON string -> value (catchable errors)
+
+write_file("out.txt", "hello")          # files, no shelling out
+append_file("out.txt", " world")
+print read_file("out.txt")
+print lines(read_file("data.csv"))      # split into lines
+
+t0 = now_ms()                           # epoch milliseconds — time your code
+```
+
+`filter` and `reduce` take the function **name as a string**, like `pmap`.
 
 ---
 
@@ -472,19 +517,22 @@ Methods include `ping`, `list_tools`, `discover`, `bind`, and `run_app`
 | `NEXUS_NO_REDACT=1` | Disable automatic log redaction |
 | `NEXUS_PROXY=<host:port>` | Route `http_get` through a proxy (anonymity) |
 | `NEXUS_BIN` | Path to the `weft` binary used by `mp_map` children |
+| `NEXUS_GPU=1` | Opt in to GPU offload for large vector ops (GPU kernels are f32 — ~7 significant digits; default stays on full-precision f64 CPU SIMD+threads) |
+| `NEXUS_AUTO_PAR=0` | Disable transparent auto-parallelization of comprehensions |
 
 ---
 
 ## 14. Gotchas & limitations
 
-- **List/map literals must be on one line.** No multi-line `[ ... ]`.
-- **`{ }` in strings is interpolation.** Use `<key>` for deferred tool templates.
+- **`{ }` in strings is interpolation.** Use `{{`/`}}` for literal braces, or
+  `<key>` for deferred tool templates.
 - **`log` is natural log**, not logging — use `trace(...)` to log.
 - **All numbers are 64-bit floats.** The declarative/verification layer uses
   exact rationals separately.
-- **Generators are eager** — `yield` collects into a list rather than streaming.
 - **`mp_map` requires the `weft` binary** (it spawns child processes); set
   `NEXUS_BIN` if it isn't on the default path.
+- **`filter`/`reduce`/`pmap`/`amap` take a function name string**, not a
+  function value — there are no lambdas.
 - The SMT prover is sound but **incomplete on hard nonlinear goals** — it returns
   *unknown* rather than guessing.
 

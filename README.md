@@ -33,7 +33,7 @@ handles *everything else* — automatically and verifiably:
 One `.nx` file declares a schema, proves a safety invariant, runs general code,
 fans work across CPU cores *and* separate OS processes, streams lazily, drives
 shell tools, talks over the network, redacts sensitive data, and protects itself
-from runaway allocation — with **200+ passing tests** and no runtime surprises.
+from runaway allocation — with **235 passing tests** and no runtime surprises.
 
 ```
 # declare intent
@@ -47,7 +47,12 @@ guarantee NoOverdraft
 
 # run it (same file)
 scores = [risk(x) for x in customers]   # auto-parallelized if pure + large
-safe   = redact(sh("cat report.txt").stdout)  # auto-sandboxed + auto-redacted
+safe   = redact(read_file("report.txt"))      # built-in file I/O, auto-redacted
+slow   = filter("is_slow", scores)            # higher-order builtins by fn name
+report = json_encode({
+    "scores": scores,                         # multi-line literals just work
+    "slow": len(slow),
+})
 ```
 
 ```
@@ -64,7 +69,10 @@ target/release/weft bench                                         # benchmarks v
 
 **Documentation:** full end-user guide → **[docs/GUIDE.md](docs/GUIDE.md)**.
 To have an AI agent write WeftScript, give it **[docs/AI_AGENT_PROMPT.md](docs/AI_AGENT_PROMPT.md)**.
-See **[APP_GALLERY.md](APP_GALLERY.md)** for 29 runnable programs.
+See **[APP_GALLERY.md](APP_GALLERY.md)** for 30 runnable programs, and
+**[COMPARISON.md](COMPARISON.md)** for measured head-to-head benchmarks against
+Python, TypeScript, and Rust (same programs, identical outputs, reproducible
+via `bench/cross/run.sh`).
 
 ---
 
@@ -75,7 +83,8 @@ stack implementing the *same* enterprise billing system:
 
 | Dimension | Result |
 | :-------- | :----- |
-| **Token usage** (LLM/human authoring) | **3.6× fewer tokens, 72% saved** vs equivalent TypeScript |
+| **Head-to-head runtime** (same program, [COMPARISON.md](COMPARISON.md)) | full pipeline **4.1× faster than Python, 2.3× faster than TypeScript**; edit-to-result **4.5× faster than Rust** (no compile step); `vdot` beats numpy |
+| **Token usage** (LLM/human authoring) | **3.6× fewer tokens, 72% saved** vs equivalent TypeScript; capability-parity pipeline: 1.8×/2.8×/3.1× fewer than Python/TS/Rust |
 | **Compile speed** | full parse+lower in **~130 µs** (vs seconds for `tsc`) |
 | **Resource use** | content addressing dedups **98.8%** of redundant inserts |
 | **Time-travel cost** | 50 version snapshots share **98%** of nodes |

@@ -9,21 +9,21 @@ Weft vs. traditional software stacks across the goal's dimensions.
 | Metric | Weft | Traditional | Verdict |
 | :----- | :---- | :---------- | :------ |
 | Token usage (same app) | 933 tok / 159 lines | 3391 tok / 419 lines | 3.6x fewer tokens (72% saved) |
-| Full compile (parse+lower) | 173.1 µs | tsc cold build: ~1–3 s | ~5777x faster than a tsc build |
+| Full compile (parse+lower) | 138.9 µs | tsc cold build: ~1–3 s | ~7202x faster than a tsc build |
 | Graph dedup on re-insert | 20 unique / 1620 inserts (98.8% saved) | files duplicated verbatim | structural sharing is automatic |
 | 50 version snapshots | 20 nodes pooled (98.0% shared) | 50x full copies | time-travel is near-free |
-| Auto-parallel execution (8-wide) | 16.5 ms parallel | 81.8 ms serial | 5.0x speedup, identical output CIDs |
+| Auto-parallel execution (8-wide) | 13.6 ms parallel | 66.6 ms serial | 4.9x speedup, identical output CIDs |
 | HEFT makespan (workflow) | 6.7 units (2 procs) | 8.0 units (1 proc) | resource-aware mapping |
-| Formal no-overdraft proof | proven=true in 8.9 µs | runtime checks + manual tests | mathematical guarantee, not a test |
-| Dot product 8M (CPU SIMD+threads) | 2.59 ms | 6.01 ms (naive scalar) | 2.3x via SIMD+threads |
-| Dot product 8M (auto-dispatch) | 50.89 ms → Gpu/gpu | GPU: NVIDIA GeForce RTX 4060 Laptop GPU | memory-bound: CPU wins (transfer-dominated) |
-| Compute kernel 2M×300 (GPU vs CPU) | 7.3 ms (GPU) | 1481.1 ms (CPU all cores) | 203.2x on NVIDIA GeForce RTX 4060 Laptop GPU |
-| Parse executable program | 17.8 µs | tsc/rustc front-end: ms–s | sub-millisecond parse keeps edit/run instant |
-| Interpreter throughput (fib 27) | 1186 ms, ~536 calls/ms | native Rust: 0.656 ms (635621 calls) | DRAWBACK: ~1808x slower than native on tight numeric recursion |
-| Auto-parallel comprehension (N=1500) | 70.1 ms (auto-parallel) | 413.1 ms (forced serial) | 5.9x with zero parallel code (threshold N≥256, user-fn body) |
-| Explicit pmap vs serial map (N=1500) | 71.1 ms (pmap) | 390.8 ms (serial map) | 5.5x across 16 cores |
-| mp_map vs amap (8 cheap tasks) | amap 0.02 ms (in-process) | mp_map 79.7 ms (8 processes) | DRAWBACK: process isolation costs ~4713x here; pays off only for heavy/isolated work |
-| Streaming take(naturals(), 1000) | 409.3 µs, O(1) memory | materialize full list: O(N) memory | lazy generators bound memory regardless of stream length |
+| Formal no-overdraft proof | proven=true in 9.7 µs | runtime checks + manual tests | mathematical guarantee, not a test |
+| Dot product 8M (CPU SIMD+threads) | 2.41 ms | 6.09 ms (naive scalar) | 2.5x via SIMD+threads |
+| Dot product 8M (auto-dispatch) | 58.62 ms → Gpu/gpu | GPU: NVIDIA GeForce RTX 4060 Laptop GPU | memory-bound: CPU wins (transfer-dominated) |
+| Compute kernel 2M×300 (GPU vs CPU) | 7.4 ms (GPU) | 1249.8 ms (CPU all cores) | 169.7x on NVIDIA GeForce RTX 4060 Laptop GPU |
+| Parse executable program | 15.5 µs | tsc/rustc front-end: ms–s | sub-millisecond parse keeps edit/run instant |
+| Interpreter throughput (fib 27) | 213 ms, ~2984 calls/ms | native Rust: 0.493 ms (635621 calls) | DRAWBACK: ~432x slower than native on tight numeric recursion |
+| Auto-parallel comprehension (N=1500) | 30.5 ms (auto-parallel) | 242.4 ms (forced serial) | 7.9x with zero parallel code (threshold N≥256, user-fn body) |
+| Explicit pmap vs serial map (N=1500) | 33.7 ms (pmap) | 223.9 ms (serial map) | 6.7x across 16 cores |
+| mp_map vs amap (8 cheap tasks) | amap 0.01 ms (in-process) | mp_map 77.8 ms (8 processes) | DRAWBACK: process isolation costs ~5443x here; pays off only for heavy/isolated work |
+| Streaming take(naturals(), 1000) | 314.5 µs, O(1) memory | materialize full list: O(N) memory | lazy generators bound memory regardless of stream length |
 | Sandbox command check | 100 ns/call | unchecked exec (no safety) | capability safety is ~free per call |
 | Triple-graph partition | K=5 P=8 E=7 | no facts/plan/runtime separation | static spec decoupled from runtime |
 

@@ -1,4 +1,4 @@
-# Weft App Gallery — 29 runnable programs across many domains
+# Weft App Gallery — 30 runnable programs across many domains
 
 Every program here runs with `weft app <file>` and produces real output. They
 span everyday apps, classic algorithms, vectorized numerics, parallel pipelines,
@@ -51,6 +51,7 @@ These combine the declarative core with the new runtime capabilities in one file
 | `sensor_grid.nx` | declared safety band + runtime `check` + **SIMD `vmean`/`vmax`/`vmin`** | flags 2 out-of-band, mean 22.2 |
 | `build_pipeline.nx` | `policy` + **tool automation**: `sh` gates, `psh` parallel matrix, `auto_fix` typo-correction | gates passed, 3/3 built, deploy auto-fixed |
 | `secure_pipeline.nx` | schema `validate` + **auto multithreading (`amap`)** + **privacy** (`redact`/`anonymize`) | pseudonymized ids, PII scrubbed, no leak |
+| `log_digest.nx` | the modern surface: **multi-line literals, `break`/`continue`, `filter`/`reduce`, `enumerate`/`items`, `any`/`all`, JSON round-trip** | level tally, slow-request digest, `digest ok: true` |
 
 ## Aggregate token economy (8 programs with Python baselines)
 
