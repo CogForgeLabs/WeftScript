@@ -2,7 +2,7 @@
 name = "nexus-app"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license-file.workspace = true
 description = "Mixed declarative + executable program loader and declarative host builtins"
 
 [dependencies]

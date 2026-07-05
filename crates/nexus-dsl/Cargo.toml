@@ -2,7 +2,7 @@
 name = "nexus-dsl"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license-file.workspace = true
 description = "Indentation-aware lexer and parser projecting Nexus DSL into the graph"
 
 [dependencies]

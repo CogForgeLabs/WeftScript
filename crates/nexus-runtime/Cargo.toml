@@ -2,7 +2,7 @@
 name = "nexus-runtime"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license-file.workspace = true
 description = "Execution engine with auto-parallelism, provenance, and knowledge-loop feedback"
 
 [dependencies]

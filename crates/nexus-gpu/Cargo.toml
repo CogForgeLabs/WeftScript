@@ -2,7 +2,7 @@
 name = "nexus-gpu"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license-file.workspace = true
 description = "Real GPU compute backend (wgpu) for Nexus vector operations"
 
 [dependencies]

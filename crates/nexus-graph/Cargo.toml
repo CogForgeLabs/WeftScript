@@ -2,7 +2,7 @@
 name = "nexus-graph"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license-file.workspace = true
 description = "Triple-graph partitioning, semantic git, and time-travel for Nexus"
 
 [dependencies]
