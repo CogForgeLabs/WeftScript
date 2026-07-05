@@ -12,6 +12,24 @@ use std::time::Duration;
 
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Cap on how many bytes any single network read will accept into memory. A
+/// hostile or misbehaving peer could otherwise stream without end and exhaust
+/// memory (a DoS reachable from a program that is allowed to open a socket).
+/// 64 MiB matches the interpreter's other allocation ceilings.
+const MAX_RESPONSE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Read a stream to a `String`, but never accept more than [`MAX_RESPONSE_BYTES`].
+/// Returns an error if the peer exceeds the cap rather than growing the buffer
+/// without bound. Invalid UTF-8 is replaced so a binary body cannot fail the read.
+fn read_capped(stream: &mut impl Read) -> Result<String, String> {
+    let mut buf = Vec::new();
+    stream.take(MAX_RESPONSE_BYTES + 1).read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    if buf.len() as u64 > MAX_RESPONSE_BYTES {
+        return Err(format!("response exceeds {MAX_RESPONSE_BYTES}-byte cap"));
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
 /// Send `payload` to a TCP `addr` ("host:port"), half-close the write side so
 /// the peer sees end-of-request, and return the full response as a string.
 pub fn tcp_request(addr: &str, payload: &str) -> Result<String, String> {
@@ -25,8 +43,7 @@ pub fn tcp_request(addr: &str, payload: &str) -> Result<String, String> {
     stream.write_all(payload.as_bytes()).map_err(|e| e.to_string())?;
     stream.flush().ok();
     let _ = stream.shutdown(std::net::Shutdown::Write);
-    let mut resp = String::new();
-    stream.read_to_string(&mut resp).map_err(|e| e.to_string())?;
+    let resp = read_capped(&mut stream)?;
     sp.record(Level::Info, "response", &[("bytes", &resp.len().to_string())]);
     Ok(resp)
 }
@@ -93,8 +110,7 @@ pub fn http_get(url: &str) -> Result<HttpResponse, String> {
     );
     stream.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
     stream.flush().ok();
-    let mut raw = String::new();
-    stream.read_to_string(&mut raw).map_err(|e| e.to_string())?;
+    let raw = read_capped(&mut stream)?;
     let (head, body) = raw.split_once("\r\n\r\n").unwrap_or((raw.as_str(), ""));
     let status = head
         .lines()
@@ -195,5 +211,22 @@ mod tests {
         assert_eq!(resp.status, 200, "resp: {:?}", resp);
         assert!(resp.body.contains("hello-nexus"));
         server.join();
+    }
+
+    #[test]
+    fn read_capped_accepts_under_limit() {
+        // A body at exactly the cap is accepted; nothing is lost.
+        let body = vec![b'x'; 4096];
+        let out = read_capped(&mut body.as_slice()).unwrap();
+        assert_eq!(out.len(), 4096);
+    }
+
+    #[test]
+    fn read_capped_rejects_over_limit() {
+        // A peer that streams past the cap is refused rather than allowed to
+        // grow the buffer without bound. `Repeat` is an endless byte source.
+        let mut endless = std::io::repeat(b'x');
+        let err = read_capped(&mut endless).unwrap_err();
+        assert!(err.contains("cap"), "got: {err}");
     }
 }
