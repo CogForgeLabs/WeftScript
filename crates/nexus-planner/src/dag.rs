@@ -53,8 +53,8 @@ impl TaskDag {
     pub fn topo_order(&self) -> Option<Vec<TaskId>> {
         let n = self.len();
         let mut indeg = vec![0usize; n];
-        for t in 0..n {
-            indeg[t] = self.deps[t].len();
+        for (t, d) in indeg.iter_mut().enumerate() {
+            *d = self.deps[t].len();
         }
         let mut queue: Vec<TaskId> = (0..n).filter(|t| indeg[*t] == 0).collect();
         queue.sort(); // deterministic

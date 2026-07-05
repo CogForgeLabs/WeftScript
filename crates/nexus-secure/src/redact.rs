@@ -55,7 +55,7 @@ pub fn luhn_valid(digits: &str) -> bool {
         }
         sum += v;
     }
-    sum % 10 == 0
+    sum.is_multiple_of(10)
 }
 
 fn detect_emails(b: &[u8], out: &mut Vec<Match>) {

@@ -42,8 +42,7 @@ pub fn simulate(
     let mut predicted_latency_ms = 0.0;
     let mut predicted_cost = 0.0;
     let mut success_probability = 1.0;
-    for t in 0..dag.len() {
-        let name = &task_names[t];
+    for (t, name) in task_names.iter().enumerate().take(dag.len()) {
         let default_latency = (dag.work[t]) * 100.0; // 100ms per work unit baseline
         predicted_latency_ms += profiles.predict_latency(name, default_latency);
         predicted_cost += profiles.predict_cost(name, 0.01);

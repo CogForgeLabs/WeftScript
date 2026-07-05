@@ -110,12 +110,15 @@ static SPAN_SEQ: AtomicU64 = AtomicU64::new(0);
 static MIN_LEVEL: AtomicU8 = AtomicU8::new(Level::Info as u8);
 static TO_STDERR: AtomicBool = AtomicBool::new(false);
 
+/// A redaction function pointer: takes the raw text and returns the redacted form.
+type RedactorFn = fn(&str) -> String;
+
 /// Optional privacy redactor applied to every message/field before a record is
 /// stored or emitted. Installed by the security layer (`nexus-secure`) so logs
 /// never leak PII/secrets. Kept here as a plain function pointer to avoid a
 /// dependency cycle (core cannot depend on secure).
-fn redactor() -> &'static RwLock<Option<fn(&str) -> String>> {
-    static R: OnceLock<RwLock<Option<fn(&str) -> String>>> = OnceLock::new();
+fn redactor() -> &'static RwLock<Option<RedactorFn>> {
+    static R: OnceLock<RwLock<Option<RedactorFn>>> = OnceLock::new();
     R.get_or_init(|| RwLock::new(None))
 }
 

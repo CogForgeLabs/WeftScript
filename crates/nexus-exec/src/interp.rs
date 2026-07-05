@@ -870,7 +870,7 @@ impl Interp {
             AExpr::Comp { elem, iter, cond, .. } => {
                 self.expr_pure(elem, visiting)
                     && self.expr_pure(iter, visiting)
-                    && cond.as_ref().map_or(true, |c| self.expr_pure(c, visiting))
+                    && cond.as_ref().is_none_or(|c| self.expr_pure(c, visiting))
             }
             AExpr::Unary(_, a) => self.expr_pure(a, visiting),
             AExpr::Binary(_, a, b) | AExpr::Index(a, b) => self.expr_pure(a, visiting) && self.expr_pure(b, visiting),

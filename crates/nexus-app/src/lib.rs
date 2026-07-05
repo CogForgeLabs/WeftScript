@@ -188,13 +188,10 @@ fn lit_num(l: &Literal) -> f64 {
         Literal::Number(r) | Literal::Money(r) => rat(*r),
         Literal::Bytes(b) => *b as f64,
         Literal::Duration(d) => *d as f64,
-        Literal::Bool(b) => {
-            if *b {
+        Literal::Bool(b)
+            if *b => {
                 1.0
-            } else {
-                0.0
             }
-        }
         _ => 0.0,
     }
 }

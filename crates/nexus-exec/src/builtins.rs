@@ -1125,7 +1125,7 @@ mod tests {
     #[test]
     fn list_and_map_ops() {
         let l = call("range", &[Value::Num(0.0), Value::Num(3.0)]).unwrap();
-        assert_eq!(call("len", &[l.clone()]).unwrap(), Value::Num(3.0));
+        assert_eq!(call("len", std::slice::from_ref(&l)).unwrap(), Value::Num(3.0));
         let m = call("set", &[call("map", &[]).unwrap(), Value::str("k"), Value::Num(9.0)]).unwrap();
         assert_eq!(call("get", &[m, Value::str("k")]).unwrap(), Value::Num(9.0));
     }

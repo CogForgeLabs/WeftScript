@@ -118,8 +118,8 @@ impl Registry {
             .filter(|p| p.capability == req.capability)
             .filter(|p| p.trust >= req.min_trust)
             .filter(|p| req.required_compliance.iter().all(|c| p.compliance.contains(c)))
-            .filter(|p| req.max_cost.map_or(true, |m| p.cost_per_call <= m))
-            .filter(|p| req.max_failure_rate.map_or(true, |m| p.failure_rate <= m))
+            .filter(|p| req.max_cost.is_none_or(|m| p.cost_per_call <= m))
+            .filter(|p| req.max_failure_rate.is_none_or(|m| p.failure_rate <= m))
             .collect()
     }
 

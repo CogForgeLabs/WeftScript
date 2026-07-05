@@ -592,8 +592,8 @@ pub fn cmd_demo() -> Result<(), String> {
     let res = maximize(
         |x| {
             // higher temperature near 0.4 and ~3 few-shot examples is best
-            let acc = 1.0 - (x[0] - 0.4).powi(2) - 0.02 * (x[1] - 3.0).powi(2);
-            acc
+            
+            1.0 - (x[0] - 0.4).powi(2) - 0.02 * (x[1] - 3.0).powi(2)
         },
         &bounds,
         60,

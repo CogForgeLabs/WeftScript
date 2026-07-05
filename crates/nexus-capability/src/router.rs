@@ -80,7 +80,7 @@ impl ModelRouter {
             .iter()
             .filter(|m| m.available)
             .filter(|m| m.context_window >= needed)
-            .filter(|m| req.max_cost.map_or(true, |c| req.cost_on(m) <= c))
+            .filter(|m| req.max_cost.is_none_or(|c| req.cost_on(m) <= c))
             .collect();
         feasible.into_iter().min_by(|a, b| {
             let ka = self.key(req, a);

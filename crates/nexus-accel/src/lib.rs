@@ -56,7 +56,7 @@ fn gpu_instance() -> Option<&'static nexus_gpu::Gpu> {
 pub fn gpu_name() -> Option<String> {
     #[cfg(feature = "gpu")]
     {
-        return gpu_instance().map(|g| g.adapter_name().to_string());
+        gpu_instance().map(|g| g.adapter_name().to_string())
     }
     #[cfg(not(feature = "gpu"))]
     {
@@ -78,7 +78,7 @@ fn gpu_opted_in() -> bool {
 
 #[cfg(feature = "gpu")]
 fn gpu_ready(n: usize) -> bool {
-    gpu_opted_in() && n >= GPU_MIN && n <= GPU_MAX && gpu_instance().is_some()
+    gpu_opted_in() && (GPU_MIN..=GPU_MAX).contains(&n) && gpu_instance().is_some()
 }
 #[cfg(not(feature = "gpu"))]
 fn gpu_ready(_n: usize) -> bool {

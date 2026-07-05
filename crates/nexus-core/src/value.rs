@@ -74,15 +74,22 @@ impl Rational {
         self.num as f64 / self.den as f64
     }
 
+    // These are the Value arithmetic API (used throughout the interpreter/evaluator),
+    // not `std::ops` operator overloads, so they deliberately keep the `add`/`sub`/
+    // `mul`/`div` names rather than implementing `Add`/`Sub`/`Mul`/`Div`.
+    #[allow(clippy::should_implement_trait)]
     pub fn add(self, o: Rational) -> Rational {
         Rational::new(self.num * o.den + o.num * self.den, self.den * o.den)
     }
+    #[allow(clippy::should_implement_trait)]
     pub fn sub(self, o: Rational) -> Rational {
         Rational::new(self.num * o.den - o.num * self.den, self.den * o.den)
     }
+    #[allow(clippy::should_implement_trait)]
     pub fn mul(self, o: Rational) -> Rational {
         Rational::new(self.num * o.num, self.den * o.den)
     }
+    #[allow(clippy::should_implement_trait)]
     pub fn div(self, o: Rational) -> Rational {
         Rational::new(self.num * o.den, self.den * o.num)
     }

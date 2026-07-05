@@ -91,7 +91,7 @@ fn handle(stream: TcpStream) -> Result<(), String> {
     if reader.read_line(&mut request_line).map_err(|e| e.to_string())? == 0 {
         return Ok(()); // client closed without sending anything
     }
-    let mut parts = request_line.trim_end().split_whitespace();
+    let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or("").to_string();
     let path = parts.next().unwrap_or("/").to_string();
 
@@ -133,7 +133,7 @@ fn handle(stream: TcpStream) -> Result<(), String> {
         "HTTP/1.0 {} OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         reply.status,
         reply.content_type,
-        reply.body.as_bytes().len(),
+        reply.body.len(),
     );
     stream.write_all(header.as_bytes()).map_err(|e| e.to_string())?;
     stream.write_all(reply.body.as_bytes()).map_err(|e| e.to_string())?;

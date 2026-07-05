@@ -24,8 +24,8 @@ impl Bounds {
         self.lo.len()
     }
     fn clip(&self, x: &mut [f64]) {
-        for i in 0..x.len() {
-            x[i] = x[i].clamp(self.lo[i], self.hi[i]);
+        for ((xi, lo), hi) in x.iter_mut().zip(self.lo.iter()).zip(self.hi.iter()) {
+            *xi = xi.clamp(*lo, *hi);
         }
     }
 }

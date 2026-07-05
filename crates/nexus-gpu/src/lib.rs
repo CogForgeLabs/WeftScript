@@ -124,7 +124,7 @@ impl Gpu {
         if n == 0 {
             return Vec::new();
         }
-        let size = (n * std::mem::size_of::<f32>()) as u64;
+        let size = std::mem::size_of_val(a) as u64;
 
         let buf_a = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("a"),

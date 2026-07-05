@@ -428,11 +428,7 @@ fn parse_bp(c: &mut Cur, min_bp: u8) -> R<AExpr> {
 
 fn parse_bp_inner(c: &mut Cur, min_bp: u8) -> R<AExpr> {
     let mut lhs = parse_prefix(c)?;
-    loop {
-        let t = match c.peek() {
-            Some(t) => t,
-            None => break,
-        };
+    while let Some(t) = c.peek() {
         let (op, lbp, rbp) = match binding_power(t) {
             Some(x) => x,
             None => break,
