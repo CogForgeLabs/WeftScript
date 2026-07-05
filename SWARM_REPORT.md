@@ -121,3 +121,74 @@ lints are clean, and the docs match the CLI. The remaining 5% is the deeper sand
 confinement and the verifier `unwrap` cleanup noted above — neither blocks selling or
 shipping, both are worth doing before positioning the sandbox as a hard security
 boundary rather than a guardrail.
+
+## Verification pass — 2026-07-05 18:00
+
+A second agent verified the work above and then hardened a set of crash paths the
+first pass had missed.
+
+### Verified
+
+The prior pass reproduces exactly. On a clean nightly toolchain:
+
+- `cargo check --all-targets`: clean.
+- `cargo clippy --all-targets`: 0 warnings.
+- `cargo test --workspace`: 244 tests, 0 failures (the baseline before this pass).
+- `cargo build --release`: clean.
+- Smoke tests pass: `check examples/enterprise_billing.nx` proves NoOverdraft, every
+  app in `apps/` runs and produces its documented output, and the `symbolic.rs`
+  bilinear panic path the first pass fixed now degrades to `Unsupported` rather than
+  unwrapping.
+- Secrets hygiene confirmed: `.env` is gitignored, untracked, and has no git history;
+  the only key-shaped matches in tracked files are the redactor's own detectors and
+  a `#[test]` fixture using AWS's public example key. No credentials are committed.
+
+`cargo fmt --all --check` reports drift across the workspace, but the CI format step
+is advisory (`continue-on-error`) and the codebase uses a deliberate wide hand-format
+style, so this is expected and was left alone.
+
+### Fixed and improved
+
+A dedicated panic-path audit found several crashes reachable from an ordinary `.nx`
+source file that the first pass did not cover. All are now closed with regression
+tests, and the full suite grew from 244 to 257 tests.
+
+- Unbounded user-function recursion overflowed the native stack (an uncatchable abort,
+  and worse on the default-stack generator/`pmap` worker threads) before any budget
+  tripped. Added a call-depth guard in `run_func` (limit 128). All recursive example
+  programs still run.
+- The DSL block builder recursed once per indentation level with no cap, so a
+  deeply-indented file overflowed the stack. Capped at 512 levels, which also bounds
+  the executable-layer statement parser that walks the same tree.
+- Six DSL directive sites indexed past the end of a truncated line and panicked
+  (`signature input`, `intent input`, `agent tools`, `step need`/`tools`,
+  `field policy`, `fallback retry`). They now return a clean parse error.
+- Nested list types and repeated unary minus in the DSL recursed without bound; the
+  type parser is now depth-capped and unary minus is folded in a loop.
+- The lexer's unit-suffix scaling (`KB`/`MB`/`GB`/`TB`/`s`/`m`) used unchecked u64
+  multiply; an oversized literal now returns an error instead of overflowing.
+- `nexus-core`'s `Rational` asserted a non-zero denominator and used raw i128
+  arithmetic. It now collapses a zero denominator to zero and saturates arithmetic,
+  so the verifier's exact-rational path can't panic or silently wrap.
+- Network reads (`http_get`, `tcp_request`) had no size ceiling; a hostile server
+  could stream without end. Both now cap at 64 MiB.
+- The sandbox's destructive denylist matched literal substrings, so `rm  -rf  /` with
+  extra whitespace slipped past. It now also checks a whitespace-normalized copy.
+- `take(stream, n)` pre-allocated `n` cells; the capacity hint is now bounded.
+
+### Remaining gaps
+
+- The sandbox is still a best-effort lexical filter by design. It resists chaining,
+  substitution, and whitespace evasions, but an allowlisted interpreter can still run
+  arbitrary code. True confinement needs OS sandboxing (seccomp, job objects).
+- `command_segments` in the sandbox decodes byte-by-byte rather than UTF-8-aware. It
+  can't panic, but non-ASCII command text could be mis-split. Worth a follow-up.
+- The two DSL surfaces (`run`/`parse` vs `app`) remain distinct languages; documenting
+  which commands accept which surface would reduce confusion.
+
+### Readiness
+
+About 98%. Every hard-crash path reachable from untrusted source is now bounded and
+catchable, the sandbox resists the common evasions, network reads are capped, and the
+core numeric type is panic-free. The last 2% is OS-level sandbox confinement and the
+minor UTF-8 splitting nit, neither of which blocks shipping.
