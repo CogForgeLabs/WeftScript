@@ -7,7 +7,36 @@ mod tokens;
 
 use std::process::ExitCode;
 
+/// Stack for the worker thread that runs the whole command. The interpreter and
+/// its analysis passes walk the AST recursively, so a deeply nested program can
+/// use far more stack than the ~1 MiB the OS gives the main thread by default.
+/// The parser caps nesting depth, but running on a generous stack means the
+/// deepest program the parser accepts always evaluates without risking an
+/// uncatchable stack-overflow abort.
+const WORKER_STACK_BYTES: usize = 64 * 1024 * 1024;
+
 fn main() -> ExitCode {
+    // Run everything on a worker thread with a large stack. Recursion depth in
+    // the parser is already bounded; this guards the recursive evaluator and
+    // analysis passes for any program within that bound.
+    match std::thread::Builder::new()
+        .name("weft-main".into())
+        .stack_size(WORKER_STACK_BYTES)
+        .spawn(run)
+    {
+        Ok(handle) => match handle.join() {
+            Ok(code) => code,
+            Err(_) => {
+                eprintln!("error: fatal internal error");
+                ExitCode::FAILURE
+            }
+        },
+        // If the OS refuses the thread, fall back to running inline.
+        Err(_) => run(),
+    }
+}
+
+fn run() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
         usage();

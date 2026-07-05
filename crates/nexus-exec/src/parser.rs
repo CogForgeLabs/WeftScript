@@ -347,10 +347,21 @@ fn parse_index_path(toks: &[Tok], line: usize) -> R<Vec<AExpr>> {
 
 // ---- Pratt expression parser --------------------------------------------
 
+/// Maximum expression nesting the recursive-descent parser will accept before
+/// returning a clean error. Without this, a pathological input such as thousands
+/// of nested parentheses or a very long `1+1+1+...` chain overflows the native
+/// stack and aborts the whole process (uncatchable) instead of surfacing a
+/// parse error. The interpreter and its analysis passes also recurse over the
+/// resulting AST, so the bound is chosen to stay safe on a default ~1 MiB stack
+/// (measured overflow began well above this in debug builds) while remaining far
+/// deeper than any hand-written expression.
+const MAX_EXPR_DEPTH: usize = 128;
+
 struct Cur<'a> {
     toks: &'a [Tok],
     pos: usize,
     line: usize,
+    depth: usize,
 }
 
 impl<'a> Cur<'a> {
@@ -374,7 +385,7 @@ impl<'a> Cur<'a> {
 
 /// Parse a complete expression from a token slice.
 pub fn parse_expr(toks: &[Tok], line: usize) -> R<AExpr> {
-    let mut c = Cur { toks, pos: 0, line };
+    let mut c = Cur { toks, pos: 0, line, depth: 0 };
     let e = parse_bp(&mut c, 0)?;
     if c.pos != c.toks.len() {
         return Err(err(line, "trailing tokens in expression"));
@@ -403,6 +414,19 @@ fn binding_power(t: &Tok) -> Option<(BinOp, u8, u8)> {
 }
 
 fn parse_bp(c: &mut Cur, min_bp: u8) -> R<AExpr> {
+    // Every nested sub-expression (parens, list/map elements, call args, operator
+    // right-hand sides) re-enters here, so one depth check guards all recursion.
+    c.depth += 1;
+    if c.depth > MAX_EXPR_DEPTH {
+        c.depth -= 1;
+        return Err(err(c.line, format!("expression nested too deeply (limit {})", MAX_EXPR_DEPTH)));
+    }
+    let r = parse_bp_inner(c, min_bp);
+    c.depth -= 1;
+    r
+}
+
+fn parse_bp_inner(c: &mut Cur, min_bp: u8) -> R<AExpr> {
     let mut lhs = parse_prefix(c)?;
     loop {
         let t = match c.peek() {
@@ -424,14 +448,30 @@ fn parse_bp(c: &mut Cur, min_bp: u8) -> R<AExpr> {
 }
 
 fn parse_prefix(c: &mut Cur) -> R<AExpr> {
+    // Long unary chains (`----1`, `not not not ...`) recurse here without passing
+    // through `parse_bp`, so count them against the same depth budget.
     match c.peek() {
         Some(Tok::Minus) => {
             c.next();
-            Ok(AExpr::Unary(UnOp::Neg, Box::new(parse_prefix(c)?)))
+            c.depth += 1;
+            if c.depth > MAX_EXPR_DEPTH {
+                c.depth -= 1;
+                return Err(err(c.line, format!("expression nested too deeply (limit {})", MAX_EXPR_DEPTH)));
+            }
+            let inner = parse_prefix(c);
+            c.depth -= 1;
+            Ok(AExpr::Unary(UnOp::Neg, Box::new(inner?)))
         }
         Some(Tok::Ident(s)) if s == "not" => {
             c.next();
-            Ok(AExpr::Unary(UnOp::Not, Box::new(parse_prefix(c)?)))
+            c.depth += 1;
+            if c.depth > MAX_EXPR_DEPTH {
+                c.depth -= 1;
+                return Err(err(c.line, format!("expression nested too deeply (limit {})", MAX_EXPR_DEPTH)));
+            }
+            let inner = parse_prefix(c);
+            c.depth -= 1;
+            Ok(AExpr::Unary(UnOp::Not, Box::new(inner?)))
         }
         _ => parse_postfix(c),
     }
@@ -674,5 +714,24 @@ mod tests {
         let app = parse_app(src).unwrap();
         assert_eq!(app.main.len(), 2);
         assert!(matches!(app.main[1], Stmt::If(_, _, _)));
+    }
+
+    #[test]
+    fn deeply_nested_expression_is_a_clean_error_not_a_stack_overflow() {
+        // Nested parens past the limit must yield a parse error, not abort.
+        let opens = "(".repeat(MAX_EXPR_DEPTH + 50);
+        let closes = ")".repeat(MAX_EXPR_DEPTH + 50);
+        let toks = nexus_dsl::lexer::lex_line(&format!("{opens}1{closes}"), 1).unwrap();
+        let e = parse_expr(&toks, 1);
+        assert!(e.is_err(), "expected a depth-limit error");
+        assert!(e.unwrap_err().to_string().contains("nested too deeply"));
+    }
+
+    #[test]
+    fn nesting_within_the_limit_still_parses() {
+        let depth = 100;
+        let src = format!("{}1{}", "(".repeat(depth), ")".repeat(depth));
+        let toks = nexus_dsl::lexer::lex_line(&src, 1).unwrap();
+        assert!(parse_expr(&toks, 1).is_ok());
     }
 }

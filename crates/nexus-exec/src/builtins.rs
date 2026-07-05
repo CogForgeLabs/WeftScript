@@ -32,6 +32,27 @@ fn trace_dispatch(op: &str, n: usize) {
 
 type ER<T> = Result<T, String>;
 
+/// Ceiling on the length of a string produced by repetition or padding. Without
+/// this, `"x" * 1e15` (or `repeat`/`rjust`/`ljust` with a huge width) asks for a
+/// petabyte-scale allocation, which aborts the whole process instead of
+/// surfacing a catchable script error. 64 MiB is far above any legitimate use.
+const MAX_STR_LEN: usize = 64 * 1024 * 1024;
+
+/// Repeat `s` `count` times, refusing to build a string past [`MAX_STR_LEN`].
+/// The multiplication is checked so a large `count` can't wrap the size math.
+fn checked_repeat(s: &str, count: usize) -> ER<String> {
+    let total = s.len().checked_mul(count);
+    match total {
+        Some(n) if n <= MAX_STR_LEN => Ok(s.repeat(count)),
+        _ => Err(format!(
+            "string too large: {} x {} exceeds {}-byte cap",
+            s.len(),
+            count,
+            MAX_STR_LEN
+        )),
+    }
+}
+
 /// Builtins that are pure computations: no I/O, no shell, no network, no
 /// clock, deterministic for a given input. The auto-parallelizer only fans a
 /// comprehension across threads when every called name is a user function it
@@ -81,7 +102,7 @@ pub fn binary(op: BinOp, a: &Value, b: &Value) -> ER<Value> {
         Mul => match (a, b) {
             // string * n repeats.
             (Value::Str(s), Value::Num(n)) | (Value::Num(n), Value::Str(s)) => {
-                Ok(Value::str(s.repeat((*n).max(0.0) as usize)))
+                Ok(Value::str(checked_repeat(s, (*n).max(0.0) as usize)?))
             }
             _ => Ok(Value::Num(a.as_num()? * b.as_num()?)),
         },
@@ -418,7 +439,7 @@ pub fn call(name: &str, args: &[Value]) -> ER<Value> {
         }
         "repeat" => {
             arity(name, args, 2)?;
-            Ok(Value::str(args[0].as_str()?.repeat(args[1].as_num()?.max(0.0) as usize)))
+            Ok(Value::str(checked_repeat(args[0].as_str()?, args[1].as_num()?.max(0.0) as usize)?))
         }
         "ord" => {
             arity(name, args, 1)?;
@@ -445,14 +466,14 @@ pub fn call(name: &str, args: &[Value]) -> ER<Value> {
             let s = args[0].as_str()?;
             let w = args[1].as_num()? as usize;
             let pad = w.saturating_sub(s.chars().count());
-            Ok(Value::str(format!("{}{}", " ".repeat(pad), s)))
+            Ok(Value::str(format!("{}{}", checked_repeat(" ", pad)?, s)))
         }
         "ljust" => {
             arity(name, args, 2)?;
             let s = args[0].as_str()?;
             let w = args[1].as_num()? as usize;
             let pad = w.saturating_sub(s.chars().count());
-            Ok(Value::str(format!("{}{}", s, " ".repeat(pad))))
+            Ok(Value::str(format!("{}{}", s, checked_repeat(" ", pad)?)))
         }
 
         // ---- list ----
@@ -1114,5 +1135,18 @@ mod tests {
         let parts = call("split", &[Value::str("a,b,c"), Value::str(",")]).unwrap();
         assert_eq!(call("len", &[parts]).unwrap(), Value::Num(3.0));
         assert_eq!(call("upper", &[Value::str("hi")]).unwrap(), Value::str("HI"));
+    }
+
+    #[test]
+    fn oversized_repeat_is_a_catchable_error_not_an_abort() {
+        // A huge multiplier must return Err rather than attempting a
+        // process-aborting allocation.
+        let huge = 1.0e15;
+        assert!(binary(BinOp::Mul, &Value::str("x"), &Value::Num(huge)).is_err());
+        assert!(call("repeat", &[Value::str("x"), Value::Num(huge)]).is_err());
+        assert!(call("rjust", &[Value::str("x"), Value::Num(huge)]).is_err());
+        assert!(call("ljust", &[Value::str("x"), Value::Num(huge)]).is_err());
+        // Ordinary repetition still works.
+        assert_eq!(call("repeat", &[Value::str("ab"), Value::Num(3.0)]).unwrap(), Value::str("ababab"));
     }
 }
