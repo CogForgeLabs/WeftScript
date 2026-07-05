@@ -98,7 +98,7 @@ for both humans and AI to author, use, and debug.*
 
 ## Architecture
 
-Fifteen crates, each independently tested:
+Sixteen crates, each independently tested:
 
 | Crate | Responsibility |
 | :---- | :------------- |
@@ -231,17 +231,22 @@ weft app pipeline.nx --trace
 ## CLI
 
 ```
-weft parse  <file.nx>   Parse and summarize
-weft build  <file.nx>   Full compiler pipeline (parse→plan→optimize→synthesize→prove→bind)
-weft check  <file.nx>   Formally verify safety guarantees
-weft fmt    <file.nx>   Re-project the graph to canonical DSL (TGG round-trip)
-weft graph  <file.nx>   List content-addressed nodes and CIDs
-weft plan   <file.nx>   Schedule the workflow (auto-parallel levels + HEFT + Pareto)
-weft run    <file.nx>   Execute the workflow DAG with provenance
-weft tokens <file.nx>   Compare token usage vs a traditional baseline
-weft mcp                Capability discovery over JSON-RPC 2.0
-weft demo               End-to-end demonstration of every subsystem
-weft bench  [--write]   Run the benchmark suite (writes BENCHMARKS.md)
+weft parse   <file.nx>        Parse and summarize
+weft build   <file.nx>        Full compiler pipeline (parse→plan→optimize→synthesize→prove→bind)
+weft check   <file.nx>        Formally verify safety guarantees
+weft fmt     <file.nx>        Re-project the graph to canonical DSL (TGG round-trip)
+weft graph   <file.nx>        List content-addressed nodes and CIDs
+weft plan    <file.nx>        Schedule the workflow (auto-parallel levels + HEFT + Pareto)
+weft run     <file.nx>        Execute the workflow DAG with provenance
+weft app     <file.nx>        Run a program (add --dashboard [--port N] to serve output)
+weft run-guarded <file.nx>    Run under hard limits + rollback (exit 0 clean, 7 breach contained)
+weft tokens  <file.nx>        Compare token usage vs a traditional baseline
+weft tokencmp <a> <b>         Compare token/char/word/line counts of two files
+weft dashboard [--port N]     Serve the observability dashboard (no program run)
+weft mcp                      Capability discovery over JSON-RPC 2.0 (stdio)
+weft mcp-serve [--tcp ADDR]   Serve MCP over stdio, or TCP with --tcp
+weft demo                     End-to-end demonstration of every subsystem
+weft bench   [--write]        Run the benchmark suite (writes BENCHMARKS.md)
 ```
 
 ---
@@ -254,8 +259,10 @@ weft bench  [--write]   Run the benchmark suite (writes BENCHMARKS.md)
   and adds zero external footprint.
 * **Structural sharing** — a single content-addressed pool backs all versions,
   making time-travel and re-builds near-free.
-* **Lean dependency tree** — only `blake3`, `serde`, `serde_json`. LTO +
-  `panic=abort` + stripped for minimal binaries.
+* **Lean dependency tree** — only `blake3`, `serde`, `serde_json`. Thin LTO,
+  one codegen unit, and a stripped release binary. Panics stay `unwind` so the
+  parallel builtins can recover a worker-thread panic instead of aborting the
+  whole process.
 * **Parallelism from structure** — concurrency is derived from the DAG, never
   hand-written, and is proven to produce bit-identical results to serial runs.
 
