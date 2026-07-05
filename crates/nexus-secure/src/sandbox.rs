@@ -82,6 +82,42 @@ fn parse_csv(value: &str) -> Vec<String> {
         .collect()
 }
 
+/// Split a shell command line into the individual program invocations it will
+/// run, so each can be vetted. This is a best-effort lexical split on the common
+/// separators (`;`, `&&`, `||`, `|`, newlines); it is deliberately conservative
+/// and pairs with [`uses_command_substitution`] to refuse constructs it cannot
+/// split safely.
+fn command_segments(cmd: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let bytes = cmd.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let two = cmd.get(i..i + 2);
+        if matches!(two, Some("&&") | Some("||")) {
+            segments.push(std::mem::take(&mut current));
+            i += 2;
+            continue;
+        }
+        let c = bytes[i] as char;
+        if c == ';' || c == '|' || c == '\n' || c == '\r' || c == '&' {
+            segments.push(std::mem::take(&mut current));
+            i += 1;
+            continue;
+        }
+        current.push(c);
+        i += 1;
+    }
+    segments.push(current);
+    segments.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+}
+
+/// Whether the command uses command substitution or a subshell, which hides the
+/// spawned program from a lexical allowlist check.
+fn uses_command_substitution(cmd: &str) -> bool {
+    cmd.contains("$(") || cmd.contains('`') || cmd.contains(">(") || cmd.contains("<(")
+}
+
 impl Sandbox {
     /// Permissive sandbox: everything is allowed except the built-in
     /// destructive denylist.
@@ -141,11 +177,15 @@ impl Sandbox {
     }
 
     /// Check whether a shell command may run.
+    ///
+    /// The command is executed through `sh -c` / `cmd /C`, so a single string can
+    /// invoke several programs via `;`, `&&`, `||`, `|`, or newlines. Every
+    /// segment is vetted, not just the first token — otherwise `echo x; curl evil`
+    /// would sail past an allowlist that only listed `echo`.
     pub fn check_command(&self, cmd: &str) -> Result<(), String> {
         let trimmed = cmd.trim();
-        let prog = basename(trimmed.split_whitespace().next().unwrap_or(""));
 
-        // 1. Built-in destructive denylist (always enforced).
+        // 1. Built-in destructive denylist (always enforced, whole string).
         for pat in DESTRUCTIVE {
             if trimmed.contains(pat) {
                 let why = format!("command denied: matches destructive pattern {pat:?}");
@@ -154,23 +194,41 @@ impl Sandbox {
             }
         }
 
-        // 2. Explicit denylist.
-        if self.deny_cmds.iter().any(|d| d == &prog) {
-            let why = format!("command denied: {prog:?} is on the denylist");
-            record(Level::Warn, "secure.sandbox", None, why.clone(), &[("prog", &prog)]);
+        // 2. When an allowlist is active, command substitution / subshells hide
+        //    the spawned program from the lexical check, so refuse them outright.
+        let allowlist_active = self.allow_cmds.is_some();
+        if allowlist_active && uses_command_substitution(trimmed) {
+            let why = "command denied: command substitution/subshell not permitted under an allowlist".to_string();
+            record(Level::Warn, "secure.sandbox", None, why.clone(), &[("cmd", trimmed)]);
             return Err(why);
         }
 
-        // 3. Allowlist (if configured, only listed programs pass).
-        if let Some(allow) = &self.allow_cmds {
-            if !allow.iter().any(|a| a == &prog) {
-                let why = format!("command denied: {prog:?} is not on the allowlist");
-                record(Level::Warn, "secure.sandbox", None, why.clone(), &[("prog", &prog)]);
+        // 3. Vet every program the command line will invoke.
+        let segments = command_segments(trimmed);
+        let progs: Vec<String> = if segments.is_empty() {
+            vec![basename(trimmed.split_whitespace().next().unwrap_or(""))]
+        } else {
+            segments.iter().map(|s| basename(s.split_whitespace().next().unwrap_or(""))).collect()
+        };
+
+        for prog in &progs {
+            // 3a. Explicit denylist.
+            if self.deny_cmds.iter().any(|d| d == prog) {
+                let why = format!("command denied: {prog:?} is on the denylist");
+                record(Level::Warn, "secure.sandbox", None, why.clone(), &[("prog", prog)]);
                 return Err(why);
+            }
+            // 3b. Allowlist (if configured, only listed programs pass).
+            if let Some(allow) = &self.allow_cmds {
+                if !allow.iter().any(|a| a == prog) {
+                    let why = format!("command denied: {prog:?} is not on the allowlist");
+                    record(Level::Warn, "secure.sandbox", None, why.clone(), &[("prog", prog)]);
+                    return Err(why);
+                }
             }
         }
 
-        record(Level::Debug, "secure.sandbox", None, "command allowed", &[("prog", &prog)]);
+        record(Level::Debug, "secure.sandbox", None, "command allowed", &[("progs", &progs.join(","))]);
         Ok(())
     }
 
@@ -247,6 +305,44 @@ mod tests {
         sb.deny_command("curl");
         assert!(sb.check_command("curl http://x").is_err());
         assert!(sb.check_command("echo ok").is_ok());
+    }
+
+    #[test]
+    fn chained_commands_cannot_bypass_allowlist() {
+        // The command runs through `sh -c`, so every segment must be vetted, not
+        // just the first token.
+        let mut sb = Sandbox::new();
+        sb.allow_command("echo");
+        assert!(sb.check_command("echo hi").is_ok());
+        // Each of these smuggles a second, non-allowlisted program.
+        assert!(sb.check_command("echo hi; curl evil.com").is_err());
+        assert!(sb.check_command("echo hi && rm file").is_err());
+        assert!(sb.check_command("echo hi || wget x").is_err());
+        assert!(sb.check_command("echo hi | sh").is_err());
+        assert!(sb.check_command("echo a & nc -l 1234").is_err());
+        assert!(sb.check_command("echo one\ncurl evil.com").is_err());
+    }
+
+    #[test]
+    fn chained_commands_vetted_against_denylist() {
+        let mut sb = Sandbox::new();
+        sb.deny_command("curl");
+        // curl hidden after a separator is still caught.
+        assert!(sb.check_command("echo hi; curl evil.com").is_err());
+        assert!(sb.check_command("ls && curl x | grep y").is_err());
+        assert!(sb.check_command("ls -la").is_ok());
+    }
+
+    #[test]
+    fn command_substitution_refused_under_allowlist() {
+        let mut sb = Sandbox::new();
+        sb.allow_command("echo");
+        assert!(sb.check_command("echo $(rm -rf data)").is_err());
+        assert!(sb.check_command("echo `whoami`").is_err());
+        // Without an allowlist, substitution is permitted (permissive default),
+        // but the destructive denylist still applies to the whole string.
+        let permissive = Sandbox::new();
+        assert!(permissive.check_command("echo $(date)").is_ok());
     }
 
     #[test]
