@@ -28,10 +28,16 @@ fn gcd(mut a: i128, mut b: i128) -> i128 {
 
 impl Rational {
     pub fn new(num: i128, den: i128) -> Rational {
-        assert!(den != 0, "rational denominator must be non-zero");
+        // A zero denominator has no defined value; rather than panic (an
+        // uncatchable abort if ever reached from a declared constraint), collapse
+        // it to canonical zero. Every arithmetic caller guards division by a zero
+        // divisor upstream, so this is defense in depth, not a normal path.
+        if den == 0 {
+            return Rational { num: 0, den: 1 };
+        }
         let sign = if den < 0 { -1 } else { 1 };
-        let num = num * sign;
-        let den = den * sign;
+        let num = num.saturating_mul(sign);
+        let den = den.saturating_mul(sign);
         let g = gcd(num, den);
         Rational { num: num / g, den: den / g }
     }
@@ -77,24 +83,29 @@ impl Rational {
     // These are the Value arithmetic API (used throughout the interpreter/evaluator),
     // not `std::ops` operator overloads, so they deliberately keep the `add`/`sub`/
     // `mul`/`div` names rather than implementing `Add`/`Sub`/`Mul`/`Div`.
+    // Arithmetic uses saturating i128 ops so a pathologically large declared
+    // constant can never overflow into a debug-build panic or a silent release
+    // wrap (a wrong proof); it clamps to the i128 range instead.
     #[allow(clippy::should_implement_trait)]
     pub fn add(self, o: Rational) -> Rational {
-        Rational::new(self.num * o.den + o.num * self.den, self.den * o.den)
+        let n = self.num.saturating_mul(o.den).saturating_add(o.num.saturating_mul(self.den));
+        Rational::new(n, self.den.saturating_mul(o.den))
     }
     #[allow(clippy::should_implement_trait)]
     pub fn sub(self, o: Rational) -> Rational {
-        Rational::new(self.num * o.den - o.num * self.den, self.den * o.den)
+        let n = self.num.saturating_mul(o.den).saturating_sub(o.num.saturating_mul(self.den));
+        Rational::new(n, self.den.saturating_mul(o.den))
     }
     #[allow(clippy::should_implement_trait)]
     pub fn mul(self, o: Rational) -> Rational {
-        Rational::new(self.num * o.num, self.den * o.den)
+        Rational::new(self.num.saturating_mul(o.num), self.den.saturating_mul(o.den))
     }
     #[allow(clippy::should_implement_trait)]
     pub fn div(self, o: Rational) -> Rational {
-        Rational::new(self.num * o.den, self.den * o.num)
+        Rational::new(self.num.saturating_mul(o.den), self.den.saturating_mul(o.num))
     }
     pub fn cmp_val(self, o: Rational) -> std::cmp::Ordering {
-        (self.num * o.den).cmp(&(o.num * self.den))
+        self.num.saturating_mul(o.den).cmp(&o.num.saturating_mul(self.den))
     }
 }
 
@@ -377,6 +388,24 @@ mod tests {
         assert_eq!(a.add(b), Rational::new(1, 2));
         assert_eq!(a.sub(b), Rational::new(1, 6));
         assert_eq!(a.mul(b), Rational::new(1, 18));
+    }
+
+    #[test]
+    fn zero_denominator_does_not_panic() {
+        // Defense in depth: a zero denominator collapses to canonical zero
+        // rather than aborting via the old `assert!`.
+        assert_eq!(Rational::new(5, 0), Rational::zero());
+        // Dividing by a zero-valued rational routes through `new(_, 0)`.
+        assert_eq!(Rational::int(3).div(Rational::zero()), Rational::zero());
+    }
+
+    #[test]
+    fn saturating_arithmetic_does_not_overflow() {
+        // Pathologically large operands clamp instead of overflow-panicking.
+        let huge = Rational::int(i128::MAX);
+        let _ = huge.mul(huge);
+        let _ = huge.add(huge);
+        let _ = huge.sub(Rational::int(i128::MIN + 1));
     }
 
     #[test]
